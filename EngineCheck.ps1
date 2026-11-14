@@ -2307,3 +2307,748 @@ function Start-JarScanParallel {
 }
 
 Write-Host "  >>> PART 3 LOADED — Network + Native + Nested + Dangerous <<<" -ForegroundColor Magenta
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║  JAR SCANNER v7.0 — PART 4/7                                         ║
+# ║  Модуль: EVERYTHING DIAGNOSTIC + MULTI-FALLBACK SEARCH               ║
+# ║                                                                      ║
+# ║  Решает проблему "es.exe возвращает 0, хотя файлы есть":             ║
+# ║    1. Полная диагностика Everything (процесс/служба/индексация)      ║
+# ║    2. Проверка индексации КАЖДОГО диска                              ║
+# ║    3. Многоступенчатый fallback:                                     ║
+# ║       a) es.exe -regex с проверкой индекса                            ║
+# ║       b) es.exe без regex (простой поиск)                             ║
+# ║       c) Get-ChildItem -Recurse по ключевым папкам                    ║
+# ║       d) where.exe через cmd (быстрее Get-ChildItem)                  ║
+# ║       e) Windows Search COM (SystemIndex)                             ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+# ═══════════════════════════════════════════════════════════════════════
+# СОСТОЯНИЕ DIAGNOSTIC (заполняется при первом вызове)
+# ═══════════════════════════════════════════════════════════════════════
+if (-not $Script:EverythingState) {
+    $Script:EverythingState = [PSCustomObject]@{
+        ProcessRunning     = $false
+        ProcessPids        = @()
+        ProcessPath        = $null
+        ServiceInstalled   = $false
+        ServiceRunning     = $false
+        ServiceName        = $null
+        EsPath             = $null
+        EsVersion          = $null
+        EverythingVersion  = $null
+        IndexedDrives      = @()
+        NonIndexedDrives   = @()
+        SearchWorking      = $false
+        TestSearchCount    = 0
+        ETPPort            = $null
+        HTTPPort           = $null
+        IsAdmin            = $false
+        Diagnosis          = @()
+        LastError          = $null
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Папки для fallback-поиска (если Everything недоступен)
+# ═══════════════════════════════════════════════════════════════════════
+$Script:FallbackSearchPaths = @(
+    "$env:APPDATA\.minecraft"
+    "$env:APPDATA\.tlauncher"
+    "$env:USERPROFILE\.lunarclient"
+    "$env:APPDATA\Badlion Client"
+    "$env:APPDATA\Feather"
+    "$env:USERPROFILE\Downloads"
+    "$env:USERPROFILE\Desktop"
+    "$env:USERPROFILE\Documents"
+    "$env:LOCALAPPDATA\Temp"
+    "$env:APPDATA"
+    "$env:LOCALAPPDATA"
+    "C:\ProgramData"
+    "C:\Games"
+    "D:\Games"
+    "C:\Minecraft"
+    "D:\Minecraft"
+) | Where-Object { Test-Path $_ -ErrorAction SilentlyContinue }
+
+# Папки, которые НЕ надо обходить в fallback (тормозят/бесполезны)
+$Script:FallbackSkipPaths = @(
+    '\\Windows\\WinSxS\\'
+    '\\Windows\\System32\\DriverStore\\'
+    '\\Windows\\servicing\\'
+    '\\\$Recycle\.Bin\\'
+    '\\System Volume Information\\'
+    '\\node_modules\\'
+    '\\\.git\\'
+    '\\\.gradle\\caches\\'
+    '\\\.m2\\repository\\'
+    '\\\.ivy2\\cache\\'
+    '\\AppData\\Local\\Packages\\'
+    '\\AppData\\Local\\Microsoft\\Edge\\'
+    '\\AppData\\Local\\Google\\Chrome\\'
+    '\\AppData\\Local\\Mozilla\\Firefox\\'
+)
+
+# Расширения, которые нас интересуют
+$Script:TargetExtensions = @('.exe','.jar','.zip','.rar','.dll','.7z')
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.1 — Проверка: запущен ли процесс Everything
+# ═══════════════════════════════════════════════════════════════════════
+function Test-EverythingProcess {
+    $procs = Get-Process -Name "Everything" -ErrorAction SilentlyContinue
+    if ($procs) {
+        $Script:EverythingState.ProcessRunning = $true
+        $Script:EverythingState.ProcessPids = @($procs | ForEach-Object { $_.Id })
+        $Script:EverythingState.ProcessPath = $procs[0].Path
+        $Script:EverythingState.Diagnosis += "[OK] Everything.exe запущен (PID: $($Script:EverythingState.ProcessPids -join ', '))"
+        return $true
+    }
+    $Script:EverythingState.ProcessRunning = $false
+    $Script:EverythingState.Diagnosis += "[WARN] Everything.exe НЕ запущен"
+    return $false
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.2 — Проверка службы Everything
+# ═══════════════════════════════════════════════════════════════════════
+function Test-EverythingService {
+    $svc = Get-Service -Name "Everything" -ErrorAction SilentlyContinue
+    if ($svc) {
+        $Script:EverythingState.ServiceInstalled = $true
+        $Script:EverythingState.ServiceName = $svc.Name
+        $Script:EverythingState.ServiceRunning = ($svc.Status -eq 'Running')
+        $Script:EverythingState.Diagnosis += "[OK] Служба Everything найдена (статус: $($svc.Status))"
+    } else {
+        $Script:EverythingState.Diagnosis += "[i] Служба Everything не установлена (работает в режиме GUI)"
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.3 — Поиск es.exe (улучшенный)
+# ═══════════════════════════════════════════════════════════════════════
+function Find-EsExe {
+    $candidates = @(
+        "$env:LOCALAPPDATA\Everything\es.exe"
+        "C:\Program Files\Everything\es.exe"
+        "C:\Program Files (x86)\Everything\es.exe"
+        "$env:USERPROFILE\Downloads\Everything\es.exe"
+        "$env:USERPROFILE\Downloads\ES\es.exe"
+        "$env:APPDATA\Everything\es.exe"
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) {
+            $Script:EverythingState.EsPath = $c
+            return $c
+        }
+    }
+
+    # Проверка в PATH
+    $cmd = Get-Command "es.exe" -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $Script:EverythingState.EsPath = $cmd.Source
+        return $cmd.Source
+    }
+
+    # Скачиваем
+    return (Install-EsExe)
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.4 — Скачивание es.exe (если нет)
+# ═══════════════════════════════════════════════════════════════════════
+function Install-EsExe {
+    Write-Log "es.exe не найден. Скачиваю..." "INFO"
+    $dir = "$env:LOCALAPPDATA\Everything"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $zip = "$env:TEMP\ES.zip"
+    $urls = @(
+        "https://www.voidtools.com/ES-1.1.0.26.zip"
+        "https://www.voidtools.com/ES-1.1.0.27.zip"
+        "https://github.com/voidtools/ES/releases/latest/download/ES-1.1.0.26.zip"
+    )
+    foreach ($url in $urls) {
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 30
+            Expand-Archive -Path $zip -DestinationPath $dir -Force
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+            $es = Join-Path $dir "es.exe"
+            if (Test-Path $es) {
+                $Script:EverythingState.EsPath = $es
+                return $es
+            }
+        } catch { }
+    }
+    $Script:EverythingState.LastError = "Не удалось скачать es.exe"
+    return $null
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.5 — Проверка версий (es.exe + Everything.exe)
+# ═══════════════════════════════════════════════════════════════════════
+function Get-EverythingVersions {
+    if (-not $Script:EverythingState.EsPath) { return }
+
+    try {
+        $esVer = & $Script:EverythingState.EsPath -version 2>&1
+        if ($LASTEXITCODE -eq 0 -and $esVer) {
+            $Script:EverythingState.EsVersion = "$esVer".Trim()
+            $Script:EverythingState.Diagnosis += "[OK] es.exe версия: $($Script:EverythingState.EsVersion)"
+        } else {
+            $Script:EverythingState.Diagnosis += "[WARN] es.exe не отвечает (код $LASTEXITCODE)"
+        }
+    } catch {
+        $Script:EverythingState.Diagnosis += "[WARN] es.exe ошибка: $_"
+    }
+
+    try {
+        $evVer = & $Script:EverythingState.EsPath -get-everything-version 2>&1
+        if ($LASTEXITCODE -eq 0 -and $evVer) {
+            $Script:EverythingState.EverythingVersion = "$evVer".Trim()
+            $Script:EverythingState.Diagnosis += "[OK] Everything.exe версия: $($Script:EverythingState.EverythingVersion)"
+        }
+    } catch { }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.6 — Проверка индексации для каждого диска
+# ═══════════════════════════════════════════════════════════════════════
+function Test-EverythingIndexing {
+    if (-not $Script:EverythingState.EsPath) { return }
+
+    $Script:EverythingState.IndexedDrives = @()
+    $Script:EverythingState.NonIndexedDrives = @()
+
+    $drives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 }
+    foreach ($drive in $drives) {
+        $driveRoot = "$($drive.Name):\"
+        # Пробуем получить 1 файл с диска
+        try {
+            $probe = & $Script:EverythingState.EsPath -path $driveRoot -n 1 2>$null
+            if ($probe -and $probe.Count -gt 0) {
+                $Script:EverythingState.IndexedDrives += $driveRoot
+                $Script:EverythingState.Diagnosis += "[OK] Диск $driveRoot индексирован"
+            } else {
+                $Script:EverythingState.NonIndexedDrives += $driveRoot
+                $Script:EverythingState.Diagnosis += "[WARN] Диск $driveRoot НЕ индексирован (es вернул 0)"
+            }
+        } catch {
+            $Script:EverythingState.NonIndexedDrives += $driveRoot
+            $Script:EverythingState.Diagnosis += "[WARN] Диск $driveRoot ошибка проверки: $_"
+        }
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.7 — Проверка что поиск вообще работает (без regex)
+# ═══════════════════════════════════════════════════════════════════════
+function Test-EverythingSearchWorking {
+    if (-not $Script:EverythingState.EsPath) { return }
+
+    # Простейший запрос: найти любой .exe
+    try {
+        $result = & $Script:EverythingState.EsPath -n 5 "*.exe" 2>$null
+        if ($result -and $result.Count -gt 0) {
+            $Script:EverythingState.SearchWorking = $true
+            $Script:EverythingState.TestSearchCount = $result.Count
+            $Script:EverythingState.Diagnosis += "[OK] Тестовый поиск '*.exe' вернул $($result.Count) результатов"
+        } else {
+            $Script:EverythingState.SearchWorking = $false
+            $Script:EverythingState.Diagnosis += "[WARN] Тестовый поиск '*.exe' вернул 0 — вероятно индекс пуст"
+        }
+    } catch {
+        $Script:EverythingState.Diagnosis += "[WARN] Тестовый поиск: $_"
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.8 — Поиск портов ETP / HTTP (для диагностики)
+# ═══════════════════════════════════════════════════════════════════════
+function Test-EverythingPorts {
+    try {
+        $ports = @(80, 3615, 8080, 8443)
+        $netstat = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+                   Where-Object { $_.OwningProcess -in $Script:EverythingState.ProcessPids } |
+                   Select-Object -ExpandProperty LocalPort -Unique
+        if ($netstat) {
+            $Script:EverythingState.Diagnosis += "[i] Everything слушает порты: $($netstat -join ', ')"
+            if ($netstat -contains 3615) { $Script:EverythingState.ETPPort = 3615 }
+            if ($netstat -contains 80)   { $Script:EverythingState.HTTPPort = 80 }
+        }
+    } catch { }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.9 — Запуск Everything (если не запущен, но установлен)
+# ═══════════════════════════════════════════════════════════════════════
+function Start-EverythingProcessIfNeeded {
+    if ($Script:EverythingState.ProcessRunning) { return $true }
+
+    $candidates = @(
+        "C:\Program Files\Everything\Everything.exe"
+        "C:\Program Files (x86)\Everything\Everything.exe"
+        "$env:LOCALAPPDATA\Everything\Everything.exe"
+    )
+    $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+    if (-not $exe) {
+        # Скачиваем portable
+        Write-Log "Everything.exe не найден. Скачиваю portable..." "INFO"
+        $dir = "$env:LOCALAPPDATA\Everything"
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $zip = "$env:TEMP\EverythingPortable.zip"
+        try {
+            Invoke-WebRequest -Uri "https://www.voidtools.com/Everything-1.4.1.1026.x64.zip" -OutFile $zip -UseBasicParsing -TimeoutSec 60
+            Expand-Archive -Path $zip -DestinationPath $dir -Force
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+            $exe = Join-Path $dir "Everything.exe"
+        } catch {
+            $Script:EverythingState.Diagnosis += "[ERR] Не удалось скачать Everything: $_"
+            return $false
+        }
+    }
+
+    try {
+        Start-Process $exe -ArgumentList "-startup" -WindowStyle Minimized
+        Write-Log "Запускаю $exe, ждём индексации 20 сек..." "INFO"
+        for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 1
+            if (Get-Process Everything -ErrorAction SilentlyContinue) { break }
+        }
+        Start-Sleep -Seconds 3
+        return (Test-EverythingProcess)
+    } catch {
+        $Script:EverythingState.Diagnosis += "[ERR] Ошибка запуска: $_"
+        return $false
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.10 — ГЛАВНАЯ: полная диагностика
+# ═══════════════════════════════════════════════════════════════════════
+function Invoke-EverythingDiagnostic {
+    Write-Log "=== ДИАГНОСТИКА EVERYTHING ===" "TITLE"
+
+    $Script:EverythingState.Diagnosis = @()
+    $Script:EverythingState.IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($Script:EverythingState.IsAdmin) {
+        $Script:EverythingState.Diagnosis += "[OK] Запущено от администратора"
+    } else {
+        $Script:EverythingState.Diagnosis += "[WARN] НЕ от администратора — некоторые папки недоступны"
+    }
+
+    # 1. Процесс
+    Test-EverythingProcess | Out-Null
+    if (-not $Script:EverythingState.ProcessRunning) {
+        Start-EverythingProcessIfNeeded | Out-Null
+    }
+
+    # 2. Служба
+    Test-EverythingService
+
+    # 3. es.exe
+    Find-EsExe | Out-Null
+    if (-not $Script:EverythingState.EsPath) {
+        Write-Log "es.exe недоступен — диагностика прервана." "WARN"
+        return $Script:EverythingState
+    }
+
+    # 4. Версии
+    Get-EverythingVersions
+
+    # 5. Порты
+    Test-EverythingPorts
+
+    # 6. Индексация
+    Test-EverythingIndexing
+
+    # 7. Тестовый поиск
+    Test-EverythingSearchWorking
+
+    return $Script:EverythingState
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.11 — Красивый вывод диагностики
+# ═══════════════════════════════════════════════════════════════════════
+function Show-EverythingDiagnostic {
+    param($State)
+    if (-not $State) { $State = $Script:EverythingState }
+
+    Write-Host ""
+    Write-Host "  ┌─── ДИАГНОСТИКА EVERYTHING ─────────────────────────────" -ForegroundColor Cyan
+    Write-Host "  │ Процесс:      $(if ($State.ProcessRunning) { "RUNNING (PID: $($State.ProcessPids -join ','))" } else { "NOT RUNNING" })" -ForegroundColor $(if ($State.ProcessRunning) { "Green" } else { "Red" })
+    Write-Host "  │ Служба:       $(if ($State.ServiceInstalled) { if ($State.ServiceRunning) { "RUNNING" } else { "STOPPED" } } else { "не установлена" })" -ForegroundColor $(if ($State.ServiceRunning) { "Green" } else { "Yellow" })
+    Write-Host "  │ es.exe:       $(if ($State.EsPath) { $State.EsPath } else { "НЕ НАЙДЕН" })" -ForegroundColor $(if ($State.EsPath) { "Green" } else { "Red" })
+    Write-Host "  │ es версия:    $(if ($State.EsVersion) { $State.EsVersion } else { "—" })" -ForegroundColor White
+    Write-Host "  │ EV версия:    $(if ($State.EverythingVersion) { $State.EverythingVersion } else { "—" })" -ForegroundColor White
+    Write-Host "  │ Индексировано: $($State.IndexedDrives.Count) дисков — $($State.IndexedDrives -join ', ')" -ForegroundColor $(if ($State.IndexedDrives.Count -gt 0) { "Green" } else { "Red" })
+    Write-Host "  │ Не индексир.: $($State.NonIndexedDrives.Count) дисков — $($State.NonIndexedDrives -join ', ')" -ForegroundColor $(if ($State.NonIndexedDrives.Count -gt 0) { "Yellow" } else { "Green" })
+    Write-Host "  │ Тест-поиск:   $(if ($State.SearchWorking) { "OK ($($State.TestSearchCount) результатов)" } else { "ПУСТО (индекс не готов)" })" -ForegroundColor $(if ($State.SearchWorking) { "Green" } else { "Red" })
+    Write-Host "  │ Права:        $(if ($State.IsAdmin) { "Администратор" } else { "Обычный пользователь" })" -ForegroundColor $(if ($State.IsAdmin) { "Green" } else { "Yellow" })
+    Write-Host "  ├─────────────────────────────────────────────────────────" -ForegroundColor Cyan
+    foreach ($line in $State.Diagnosis) {
+        $color = "Gray"
+        if ($line -match '^\[OK\]')   { $color = "Green" }
+        if ($line -match '^\[WARN\]') { $color = "Yellow" }
+        if ($line -match '^\[ERR\]')  { $color = "Red" }
+        Write-Host "  │ $line" -ForegroundColor $color
+    }
+    Write-Host "  └─────────────────────────────────────────────────────────" -ForegroundColor Cyan
+
+    if (-not $State.SearchWorking -and $State.IndexedDrives.Count -eq 0) {
+        Write-Host ""
+        Write-Log "ИНДЕКС EVERYTHING ПУСТ — es.exe бесполезен. Нужно:" "WARN"
+        Write-Host "        1. Открыть Everything.exe" -ForegroundColor Yellow
+        Write-Host "        2. Tools → Options → Indexes → NTFS" -ForegroundColor Yellow
+        Write-Host "        3. Убедиться, что C: и другие диски включены (галочка)" -ForegroundColor Yellow
+        Write-Host "        4. Нажать Force Rebuild, подождать 1-5 минут" -ForegroundColor Yellow
+        Write-Host "        Fallback на Get-ChildItem и Windows Search будет использован." -ForegroundColor Yellow
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.12 — FALLBACK 1: Get-ChildItem -Recurse по ключевым папкам
+# ═══════════════════════════════════════════════════════════════════════
+function Invoke-FileSystemSearchFallback {
+    param(
+        [string[]]$Patterns,
+        [string[]]$Extensions = $Script:TargetExtensions,
+        [int]$MaxResults = 500,
+        [int]$MaxDepth = 8
+    )
+
+    Write-Log "Fallback: Get-ChildItem -Recurse по ключевым папкам..." "INFO"
+    $results = New-Object System.Collections.Generic.List[string]
+
+    # Собираем regex из паттернов
+    $regex = ($Patterns | ForEach-Object { [regex]::Escape($_) }) -join '|'
+
+    foreach ($basePath in $Script:FallbackSearchPaths) {
+        if ($results.Count -ge $MaxResults) { break }
+        if (-not (Test-Path $basePath -ErrorAction SilentlyContinue)) { continue }
+
+        Write-Host "`r  [FS] Сканирую $basePath ($($results.Count) найдено)" -NoNewline -ForegroundColor DarkGray
+
+        try {
+            # Ограничиваем глубину вручную (PS 5.1 не поддерживает -Depth)
+            $stack = New-Object System.Collections.Stack
+            $stack.Push(@{ Path = $basePath; Depth = 0 })
+
+            while ($stack.Count -gt 0 -and $results.Count -lt $MaxResults) {
+                $current = $stack.Pop()
+                if ($current.Depth -gt $MaxDepth) { continue }
+
+                try {
+                    # Ищем файлы по расширению
+                    $files = Get-ChildItem -Path $current.Path -File -ErrorAction SilentlyContinue -Force |
+                             Where-Object {
+                                 $script:TargetExtensions -contains $_.Extension.ToLower() -and
+                                 $_.Name -match $regex
+                             }
+                    foreach ($f in $files) {
+                        if ($results.Count -ge $MaxResults) { break }
+                        $results.Add($f.FullName)
+                    }
+
+                    # Идём в подпапки, кроме skip-листа
+                    $dirs = Get-ChildItem -Path $current.Path -Directory -ErrorAction SilentlyContinue -Force
+                    foreach ($d in $dirs) {
+                        $skip = $false
+                        foreach ($skp in $Script:FallbackSkipPaths) {
+                            if ($d.FullName -match $skp) { $skip = $true; break }
+                        }
+                        if ($skip) { continue }
+                        $stack.Push(@{ Path = $d.FullName; Depth = ($current.Depth + 1) })
+                    }
+                } catch { }
+            }
+        } catch { }
+    }
+    Write-Host ""
+    Write-Log "FS fallback: найдено $($results.Count) файлов" "INFO"
+    return $results
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.13 — FALLBACK 2: where.exe через cmd (быстрее для C:\)
+# ═══════════════════════════════════════════════════════════════════════
+function Invoke-WhereExeFallback {
+    param(
+        [string[]]$Patterns,
+        [int]$MaxResults = 500
+    )
+
+    Write-Log "Fallback: where.exe /r по C:\ (может занять 1-2 мин)..." "INFO"
+    $results = New-Object System.Collections.Generic.List[string]
+
+    foreach ($pattern in $Patterns) {
+        if ($results.Count -ge $MaxResults) { break }
+        try {
+            $output = & cmd.exe /c "where /r C:\ *$pattern* 2>nul" 2>$null
+            if ($output) {
+                foreach ($line in $output) {
+                    if ($results.Count -ge $MaxResults) { break }
+                    if ($line -match '\.(exe|jar|zip|rar|dll|7z)$' -and (Test-Path $line -ErrorAction SilentlyContinue)) {
+                        $results.Add($line)
+                    }
+                }
+            }
+        } catch { }
+    }
+    Write-Log "where.exe fallback: найдено $($results.Count) файлов" "INFO"
+    return $results
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.14 — FALLBACK 3: Windows Search COM (SystemIndex)
+# ═══════════════════════════════════════════════════════════════════════
+function Invoke-WindowsSearchFallback {
+    param(
+        [string[]]$Patterns,
+        [int]$MaxResults = 300
+    )
+
+    Write-Log "Fallback: Windows Search (SystemIndex)..." "INFO"
+    $results = New-Object System.Collections.Generic.List[string]
+
+    try {
+        $connector = New-Object -ComObject Search.CollatorDataSource
+        $connection = $connector.Initialize()
+
+        $queryParts = $Patterns | ForEach-Object {
+            "System.FileName LIKE '%$($_ -replace "'", "''")%'"
+        }
+        $sql = "SELECT System.ItemPathDisplay FROM SystemIndex WHERE ($($queryParts -join ' OR ')) ORDER BY System.DateModified DESC"
+
+        $queryHelper = New-Object -ComObject Search.QueryHelper
+        $query = $queryHelper.GetQuery($connection, $sql)
+
+        $count = 0
+        while ($query.MoveNext() -and $count -lt $MaxResults) {
+            try {
+                $path = $query.GetValue($query.GetColumnCount() - 1)  # ItemPathDisplay — последний
+                if ($path -and (Test-Path $path -ErrorAction SilentlyContinue)) {
+                    $results.Add("$path")
+                    $count++
+                }
+            } catch { }
+        }
+        [void][System.Runtime.Interopservices.Marshal]::ReleaseComObject($query)
+        [void][System.Runtime.Interopservices.Marshal]::ReleaseComObject($queryHelper)
+        [void][System.Runtime.Interopservices.Marshal]::ReleaseComObject($connector)
+    } catch {
+        Write-Log "Windows Search недоступен (индексация выключена?): $_" "WARN"
+    }
+
+    Write-Log "Windows Search fallback: найдено $($results.Count) файлов" "INFO"
+    return $results
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.15 — Многоступенчатый поиск (Everything → FS → where → WindowsSearch)
+# ═══════════════════════════════════════════════════════════════════════
+function Invoke-MultiStageSearch {
+    param(
+        [string[]]$Patterns,
+        [int]$MaxResults = 500
+    )
+
+    $allResults = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+    $stagesUsed = @()
+
+    # ─── Ступень 1: Everything regex ───
+    if ($Script:EverythingState.SearchWorking -and $Script:EverythingState.EsPath) {
+        Write-Log "Ступень 1: es.exe -regex..." "INFO"
+        try {
+            $regexPattern = $Patterns -join '|'
+            $esResult = & $Script:EverythingState.EsPath -regex $regexPattern -n $MaxResults 2>$null
+
+            if ($esResult -and $esResult.Count -gt 0) {
+                $filtered = $esResult | Where-Object {
+                    $_ -match '\.(exe|jar|zip|rar|dll|7z)$' -and
+                    (Test-Path $_ -ErrorAction SilentlyContinue)
+                }
+                foreach ($r in $filtered) {
+                    if (-not $seen.ContainsKey($r)) {
+                        $seen[$r] = $true
+                        $allResults.Add($r)
+                    }
+                }
+                $stagesUsed += "Everything-regex: $($allResults.Count)"
+                Write-Log "  → Everything вернул $($allResults.Count) файлов" "OK"
+            } else {
+                Write-Log "  → Everything вернул 0 (возможно индекс не покрывает нужные папки)" "WARN"
+            }
+        } catch {
+            Write-Log "  → Everything ошибка: $_" "WARN"
+        }
+    }
+
+    # ─── Ступень 2: Everything без regex (по подстрокам) ───
+    if ($allResults.Count -eq 0 -and $Script:EverythingState.SearchWorking -and $Script:EverythingState.EsPath) {
+        Write-Log "Ступень 2: es.exe без regex (по одной подстроке)..." "INFO"
+        foreach ($pattern in $Patterns) {
+            if ($allResults.Count -ge $MaxResults) { break }
+            try {
+                $esResult = & $Script:EverythingState.EsPath -n $MaxResults "*$pattern*" 2>$null
+                if ($esResult) {
+                    $filtered = $esResult | Where-Object {
+                        $_ -match '\.(exe|jar|zip|rar|dll|7z)$' -and
+                        (Test-Path $_ -ErrorAction SilentlyContinue)
+                    }
+                    foreach ($r in $filtered) {
+                        if (-not $seen.ContainsKey($r)) {
+                            $seen[$r] = $true
+                            $allResults.Add($r)
+                        }
+                    }
+                }
+            } catch { }
+        }
+        if ($allResults.Count -gt 0) {
+            $stagesUsed += "Everything-substring: $($allResults.Count)"
+            Write-Log "  → Найдено $($allResults.Count) файлов" "OK"
+        }
+    }
+
+    # ─── Ступень 3: Get-ChildItem по ключевым папкам ───
+    if ($allResults.Count -eq 0) {
+        Write-Log "Ступень 3: Get-ChildItem по ключевым папкам..." "INFO"
+        $fs = Invoke-FileSystemSearchFallback -Patterns $Patterns -MaxResults $MaxResults
+        foreach ($r in $fs) {
+            if (-not $seen.ContainsKey($r)) {
+                $seen[$r] = $true
+                $allResults.Add($r)
+            }
+        }
+        if ($allResults.Count -gt 0) { $stagesUsed += "FS-fallback: $($allResults.Count)" }
+    }
+
+    # ─── Ступень 4: where.exe (только для малого числа паттернов) ───
+    if ($allResults.Count -eq 0 -and $Patterns.Count -le 5) {
+        Write-Log "Ступень 4: where.exe /r C:\ ..." "INFO"
+        $we = Invoke-WhereExeFallback -Patterns $Patterns -MaxResults $MaxResults
+        foreach ($r in $we) {
+            if (-not $seen.ContainsKey($r)) {
+                $seen[$r] = $true
+                $allResults.Add($r)
+            }
+        }
+        if ($allResults.Count -gt 0) { $stagesUsed += "where.exe: $($allResults.Count)" }
+    }
+
+    # ─── Ступень 5: Windows Search COM ───
+    if ($allResults.Count -eq 0) {
+        Write-Log "Ступень 5: Windows Search (SystemIndex)..." "INFO"
+        $ws = Invoke-WindowsSearchFallback -Patterns $Patterns -MaxResults $MaxResults
+        foreach ($r in $ws) {
+            if (-not $seen.ContainsKey($r)) {
+                $seen[$r] = $true
+                $allResults.Add($r)
+            }
+        }
+        if ($allResults.Count -gt 0) { $stagesUsed += "WinSearch: $($allResults.Count)" }
+    }
+
+    # Итог
+    Write-Host ""
+    Write-Host "  ┌─── ИТОГ ПОИСКА ──────────────────────────────────────" -ForegroundColor Cyan
+    Write-Host "  │ Всего найдено:      $($allResults.Count)" -ForegroundColor $(if ($allResults.Count -gt 0) { "Red" } else { "Green" })
+    Write-Host "  │ Использовано:       $($stagesUsed -join ', ')" -ForegroundColor White
+    Write-Host "  └──────────────────────────────────────────────────────" -ForegroundColor Cyan
+
+    return $allResults
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.16 — ГЛАВНАЯ: Start-EverythingScan (переопределяет Part 1)
+# ═══════════════════════════════════════════════════════════════════════
+function Start-EverythingScan {
+    Write-Log "=== EVERYTHING SCAN (v7.0) ===" "TITLE"
+
+    # 1. Диагностика
+    $state = Invoke-EverythingDiagnostic
+    Show-EverythingDiagnostic -State $state
+
+    # 2. Паттерны из базы читов
+    $patterns = @(
+        'impact','wurst','sigma','meteor','aristois','future',
+        'konas','zeusclient','vape','doomsday','nightware','liquidbounce',
+        'novoline','astolfo','moonlight','nurik','celestial','expensive',
+        'zamorozka','celka','arbuz','britva','bariton','rogalik','haruka',
+        'wissend','fluger','vortex','astra','newcode','bleachhack','huzuni',
+        'skillclient','nodus','inertia','ares','exire','jex','hakari','hush',
+        'hach','luminex','nuclear','remix','cuckoo','pandora','azura','akrien',
+        'minced','deadcode','takker','faker','xameleon','fuzeclient','venus',
+        'catlavan','seppuku','koks','kov','stealth','valor','horizon','eagle',
+        'sakura','kami','raphael','incognito','trident','insomnia','ether'
+    )
+
+    # 3. Многоступенчатый поиск
+    $results = Invoke-MultiStageSearch -Patterns $patterns -MaxResults 1000
+
+    # 4. Вывод результатов
+    if ($results.Count -eq 0) {
+        Write-Log "Совпадений НЕ найдено ни одной ступенью." "OK"
+        if (-not $state.SearchWorking) {
+            Write-Log "Причина: Everything-индекс пуст, fallback тоже ничего не нашёл." "WARN"
+            Write-Log "Проверь: пути в `$Script:FallbackSearchPaths содержат нужные папки?" "WARN"
+        }
+        return
+    }
+
+    Write-Host ""
+    Write-Log "НАЙДЕНО $($results.Count) подозрительных файлов:" "FOUND"
+    $grouped = $results | Group-Object { [System.IO.Path]::GetExtension($_).ToLower() } | Sort-Object Count -Descending
+
+    foreach ($g in $grouped) {
+        Write-Host ""
+        Write-Host "  ═══ $($g.Name) ($($g.Count)) ═══" -ForegroundColor Yellow
+        foreach ($f in $g.Group | Select-Object -First 30) {
+            $size = "?"
+            try { $size = [math]::Round((Get-Item $f).Length / 1KB, 1) } catch { }
+            Write-Host "    [!] $f ($size KB)" -ForegroundColor Red
+            $Script:Report.Add("Everything: $f")
+        }
+        if ($g.Count -gt 30) {
+            Write-Host "    ... и ещё $($g.Count - 30) файлов" -ForegroundColor DarkYellow
+        }
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.17 — Функция для диагностики по требованию (из меню)
+# ═══════════════════════════════════════════════════════════════════════
+function Start-EverythingDiagnosticOnly {
+    Write-Log "=== ONLY DIAGNOSTIC ===" "TITLE"
+    $state = Invoke-EverythingDiagnostic
+    Show-EverythingDiagnostic -State $state
+
+    # Записать диагностику в отчёт
+    $Script:Report.Add("")
+    $Script:Report.Add("=== EVERYTHING DIAGNOSTIC ===")
+    $Script:Report.Add("Process: $($state.ProcessRunning) (PIDs: $($state.ProcessPids -join ','))")
+    $Script:Report.Add("Service: $($state.ServiceInstalled) (Running: $($state.ServiceRunning))")
+    $Script:Report.Add("es.exe: $($state.EsPath)")
+    $Script:Report.Add("es version: $($state.EsVersion)")
+    $Script:Report.Add("Everything version: $($state.EverythingVersion)")
+    $Script:Report.Add("Indexed: $($state.IndexedDrives -join ', ')")
+    $Script:Report.Add("Non-indexed: $($state.NonIndexedDrives -join ', ')")
+    $Script:Report.Add("Search working: $($state.SearchWorking)")
+    foreach ($line in $state.Diagnosis) {
+        $Script:Report.Add("  $line")
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4.18 — Совместимость с Part 1 (старая Ensure-Everything)
+# ═══════════════════════════════════════════════════════════════════════
+function Ensure-Everything {
+    if (-not $Script:EverythingState.EsPath -or -not $Script:EverythingState.SearchWorking) {
+        Invoke-EverythingDiagnostic | Out-Null
+    }
+    return $Script:EverythingState.EsPath
+}
+
+Write-Host "  >>> PART 4 LOADED — Everything Diagnostic + Multi-Fallback <<<" -ForegroundColor Magenta
