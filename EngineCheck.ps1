@@ -1,21 +1,17 @@
 <#
 .SYNOPSIS
-    EngineCheck v5.0 - Full ScreenShare Checker
+    EngineCheck v6.0 - Advanced ScreenShare Checker
 .DESCRIPTION
-    1200+ lines. Parallel JAR scan, Everything diagnostics, byte-level strings,
-    BAM, Prefetch, Amcache, RecentDocs, DNS, hosts, scheduled tasks.
+    Fixed RunspacePool, added Process Memory Scanner (ReadProcessMemory),
+    improved Everything diagnostics, reduced false positives.
 .NOTES
     Run: irm <raw-url> | iex
 #>
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  CONFIG                                                      ║
-# ╚══════════════════════════════════════════════════════════════╝
 $Config = @{
     TelegramBotToken = "ТВОЙ_ТОКЕН_БОТА"
     TelegramChatId   = "ТВОЙ_CHAT_ID"
     MaxJarSizeMB     = 100
-    ScanTimeoutSec   = 1800
 }
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -26,92 +22,71 @@ $Script:WhitelistPaths = @(
     '\\org\\eclipse\\','\\org\\bouncycastle\\','\\org\\apache\\','\\com\\google\\',
     '\\io\\netty\\','\\com\\mojang\\','\\io\\papermc\\','\\org\\spigotmc\\',
     '\\org\\slf4j\\','\\org\\jetbrains\\','\\org\\json\\','\\com\\fasterxml\\',
-    '\\net\\minecraft\\','\\com\\electronwill\\','\\org\\lwjgl\\',
-    '\\net\\fabricmc\\','\\org\\quiltmc\\','\\net\\neoforged\\','\\net\\minecraftforge\\',
-    '\\com\\github\\','\\com\\microsoft\\','\\com\\sun\\','\\java\\','\\jdk\\','\\jre\\',
-    '\\\.gradle\\','\\\.m2\\','\\\.ivy2\\','\\\.sbt\\'
+    '\\net\\minecraft\\','\\org\\lwjgl\\','\\net\\fabricmc\\','\\org\\quiltmc\\',
+    '\\net\\neoforged\\','\\net\\minecraftforge\\','\\com\\github\\',
+    '\\\.gradle\\','\\\.m2\\','\\\.ivy2\\','\\runtime\\','\\jre\\','\\jdk\\'
 )
+
 $Script:WhitelistNames = @(
-    # Античиты
     'grim','shard','vulcan','matrix','spartan','aac','ncp','negativity','polar',
     'intave','themis','karhu','verus','eris','medusa','sentinel','buzz','reflex',
-    'anticheat','nightfall','typhoon','kaboom','bedwars-anticheat',
-    # Библиотеки
+    'anticheat','nightfall','typhoon','kaboom',
     'antlr','icu4j','guava','netty','log4j','gson','snakeyaml','bcprov','bcpkix',
     'bouncycastle','maven','paper-api','spigot-api','bukkit','sat4j','fabric-loader',
     'quilt-loader','forge','neoforge','slf4j','listenablefuture','sisu','asm',
     'ow2','objectweb','commons-','jsr','jakarta','kotlin-','scala-','groovy',
     'junit','testng','mockito','hamcrest','assertj','lombok',
-    # Моды
     'sodium','iris','optifine','rubidium','embeddium','modmenu','fabric-api',
     'cloth-config','yacl','lithium','phosphor','ferritecore','krypton','starlight',
     'indium','continuity','lazydfu','c2me','noisium','memoryleakfix','dynamic-fps',
-    'fps-reducer','smooth-boot','modernfix','fastload','fast-ip-ping','vmp-fabric',
+    'fps-reducer','smooth-boot','modernfix','fastload','fast-ip-ping',
     'carpet','carpet-extra','litematica','minihud','tweakeroo','item-scroller',
     'shulkerboxtooltip','appleskin','roughly-enough-items','jei','rei','emi',
-    'wthit','jade','hwyla','mod-menu','malilib','sodium-extra','reeses-sodium',
-    # Лаунчеры
-    'lunar','badlion','feather-','labymod','forge-launcher','tlauncher','technic',
-    'prism','multimc','atlauncher','gdlauncher','polymc'
+    'wthit','jade','hwyla','mod-menu','malilib','sodium-extra',
+    'lunar','badlion','labymod','tlauncher','technic','prism','multimc',
+    'atlauncher','gdlauncher','polymc','java-runtime','delta','blue','wave'
 )
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  СИГНАТУРЫ (300+ читов, 100+ функций)                        ║
+# ║  SIGNATURES (уточнённые)                                     ║
 # ╚══════════════════════════════════════════════════════════════╝
 $Script:CheatNames = @(
-    # Русские
-    'zamorozka','nurik','nursultan','celestial','celka','arbuz','britva','bariton',
-    'rogalik','sperma','astra','britva','doomsday','nightware','extazyy','troxill',
-    # Крупные международные
     'impact','wurst','aristois','huzuni','skillclient','nodus','inertia','ares',
     'sigma','meteor','liquidbounce','expensive','neverhook','wexside','future',
     'dreampool','vape','konas','zeusclient','richclient','ghostclient','rusherhack',
     'thunderhack','moonhack','nova','exire','jex','hakari','hush','hach','haruka',
     'wissend','fluger','vortex','newcode','luminex','nuclear','bleachhack',
-    # 1.8.9 / PvP
     'novoline','remix','astolfo','moonlight','cuckoo','pandora','azura','akrien',
     'minced','deadcode','dauntiblyat','takker','faker','xameleon','fuzeclient',
-    'wisefolder','feather','delta','eclipse','venus','catlavan','win4','dorito',
-    'hero','spooky','winter','azura','seppuku','koks','kov','stealth','valor',
-    # Новые
-    'fluger','horizon','nuclear-v2','eagle','konas','sakura','kami','blue',
-    'oldver','polar-client','raphael','raph','drag','drag-client','incognito',
-    'trident','wave','waveclient','zucc','huzuni','insomnia','ether','azura',
-    # Обфусцированные / редкие
-    'rename','editme','faker','notabot','notacheat','yescheat','finally',
-    'neversoft','onlysoft','ofcourse','simply','plain'
+    'wisefolder','feather','eclipse-client','venus','catlavan','win4','dorito',
+    'hero','spooky','winter','seppuku','koks','kov','stealth','valor','fluger',
+    'horizon','nuclear-v2','eagle','sakura','kami','oldver','polar-client',
+    'raphael','drag-client','incognito','trident','waveclient','zucc','insomnia',
+    'ether','zamorozka','nurik','nursultan','celestial','celka','arbuz','britva',
+    'bariton','rogalik','sperma','astra','doomsday','nightware','extazyy','troxill'
 )
 
 $Script:DefinitiveFuncs = @(
-    # Combat — 100% чит
-    'killaura','kill_aura','aura','aimbot','aim_bot','aimassist','aim_assist',
-    'hitbox_expand','hitboxexpand','hitboxex','reach_hack','reachhack',
+    'killaura','kill_aura','aimbot','aim_bot','aimassist','aim_assist',
+    'hitbox_expand','hitboxexpand','reach_hack','reachhack',
     'autototem','auto_totem','autocrystal','auto_crystal','autotrap','auto_trap',
     'autolog','auto_log','autopot','auto_pot','criticals','anti_knockback',
-    'antiknockback','velocity_mod','velocitymod','velocity_ex','velocityex',
-    'backtrack','fake_lag','fakelag','pingspoof','ping_spoof','timerhack',
-    'timer_hack','keep_sprint','keepsprint','noslow','no_slow','wtap','s_tap',
-    # Movement — 100% чит
-    'scaffold_walk','scaffoldwalk','scaffold','flyhack','fly_hack','speedhack',
-    'speed_hack','longjump','long_jump','step_hack','stephack','nofall','no_fall',
-    'jesus','dolphin','bhop','bunnyhop','bunny_hop','antivelocity','anti_velocity',
-    # Render — 100% чит
-    'xray','x_ray','fullbright','tracers','nametags','name_tags','wallhack',
-    'wall_hack','esp','chams','outline_esp','outlineesp','skeleton','see_through',
-    # World
-    'nuker','nukeraura','nuker_aura','fastbreak','fast_break','fastplace',
-    'fast_place','instabreak','insta_break','scaffoldtower','tower','ghosthand',
-    'ghost_hand','auto_build','autobuild','autofarm','auto_farm','autosell',
-    'auto_sell','autobuy','auto_buy','autocraft','auto_craft','chest_stealer',
-    'cheststealer','inventory_move','invmove','inv_move','autoshield','auto_shield',
-    # Exploit
-    'packet_flood','packetflood','phase','noclip','no_clip','clip','teleport',
-    'tp_hack','tphack','blink','chunk_load','chunkload','chunk_load_exploit'
+    'antiknockback','velocity_mod','velocitymod','backtrack','fake_lag','fakelag',
+    'pingspoof','ping_spoof','timerhack','timer_hack','keep_sprint','keepsprint',
+    'noslow','no_slow','scaffold_walk','scaffoldwalk','scaffold','flyhack',
+    'fly_hack','speedhack','speed_hack','longjump','long_jump','step_hack',
+    'stephack','nofall','no_fall','jesus','dolphin','bhop','bunnyhop','bunny_hop',
+    'antivelocity','anti_velocity','xray','x_ray','fullbright','tracers','nametags',
+    'name_tags','wallhack','wall_hack','esp','chams','outline_esp','outlineesp',
+    'nuker','nukeraura','fastbreak','fast_break','fastplace','fast_place',
+    'instabreak','insta_break','scaffoldtower','tower','ghosthand','ghost_hand',
+    'auto_build','autobuild','autofarm','auto_farm','chest_stealer','cheststealer',
+    'inventory_move','invmove','phase','noclip','no_clip','teleport','tp_hack'
 )
 
 $Script:SignatureFuncs = @(
     'aim','hit','reach','velocity','fly','speed','jump','totem','crystal',
-    'aura','block','place','break','tower','scaffold','farm','farm','sell','buy',
+    'aura','block','place','break','tower','scaffold','farm','sell','buy',
     'tracers','esp','xray','bright','walk','run','sprint','crouch','sneak'
 )
 
@@ -121,23 +96,18 @@ $Script:PackageIndicators = @(
     'module/combat/','module/movement/','module/render/','module/player/',
     'modules/combat/','modules/movement/','modules/render/','modules/player/',
     'hack/combat/','hack/movement/','hack/render/','hack/player/',
-    'cheat/combat/','cheat/movement/','cheat/render/','cheat/player/',
-    'impl/combat/','impl/movement/','impl/render/','impl/player/',
-    'features/combat/','features/movement/','features/render/','features/player/'
+    'cheat/combat/','cheat/movement/','cheat/render/','cheat/player/'
 )
 
 $Script:ScoreThreshold = 5
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  STATE                                                       ║
+# ║  STATE & UI                                                  ║
 # ╚══════════════════════════════════════════════════════════════╝
 $Script:Report = New-Object System.Collections.Generic.List[string]
 $Script:Threats = 0
 $Script:StartTime = $null
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  UI                                                          ║
-# ╚══════════════════════════════════════════════════════════════╝
 function Write-Log {
     param([string]$Msg, [string]$Lvl = "INFO")
     $ts = (Get-Date).ToString('HH:mm:ss')
@@ -155,31 +125,29 @@ function Show-Banner {
     Clear-Host
     Write-Host @"
   ╔═══════════════════════════════════════════════════════════════╗
-  ║                                                               ║
-  ║          ENGINE CHECK v5.0 — Full Parallel Scanner            ║
-  ║          1200+ lines | RunspacePool | Deep JAR                ║
-  ║                                                               ║
+  ║          ENGINE CHECK v6.0 — Memory + JAR + Everything        ║
   ╚═══════════════════════════════════════════════════════════════╝
 "@ -ForegroundColor Cyan
 }
 
 function Show-Menu {
     Write-Host ""
-    Write-Host "  ┌────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "  │  [1] ПОЛНЫЙ СКАН (все модули)                          │" -ForegroundColor White
-    Write-Host "  │  [2] JAR скан — ТОЛЬКО mods/ (быстро)                  │" -ForegroundColor White
-    Write-Host "  │  [3] JAR скан — ВСЕ .jar на ПК (параллельно)           │" -ForegroundColor White
-    Write-Host "  │  [4] Службы + Процессы                                 │" -ForegroundColor White
-    Write-Host "  │  [5] Everything (файлы по диску)                       │" -ForegroundColor White
-    Write-Host "  │  [6] Strings (explorer.exe / javaw.exe)                │" -ForegroundColor White
-    Write-Host "  │  [7] Артефакты (BAM / Prefetch / Amcache / Recent)     │" -ForegroundColor White
-    Write-Host "  │  [8] Сеть (DNS / hosts / TCP)                          │" -ForegroundColor White
-    Write-Host "  │  [9] Отправить отчёт в Telegram                        │" -ForegroundColor White
-    Write-Host "  │  [0] Выход                                             │" -ForegroundColor White
-    Write-Host "  └────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+    Write-Host "  [1] ПОЛНЫЙ СКАН (все модули)" -ForegroundColor White
+    Write-Host "  [2] JAR скан — mods/ (быстро)" -ForegroundColor White
+    Write-Host "  [3] JAR скан — ВСЕ .jar на ПК" -ForegroundColor White
+    Write-Host "  [4] Процессы + Память (javaw.exe)" -ForegroundColor White
+    Write-Host "  [5] Everything (диагностика + поиск)" -ForegroundColor White
+    Write-Host "  [6] Строки в файлах (explorer/javaw)" -ForegroundColor White
+    Write-Host "  [7] Артефакты (BAM / Prefetch / Amcache)" -ForegroundColor White
+    Write-Host "  [8] Сеть (DNS / hosts / TCP)" -ForegroundColor White
+    Write-Host "  [9] Отправить отчёт в Telegram" -ForegroundColor White
+    Write-Host "  [0] Выход" -ForegroundColor White
     Write-Host ""
 }
 
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ                                     ║
+# ╚══════════════════════════════════════════════════════════════╝
 function Test-Whitelisted {
     param([string]$FullPath, [string]$Name)
     foreach ($wp in $Script:WhitelistPaths) {
@@ -191,9 +159,6 @@ function Test-Whitelisted {
     return $false
 }
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  JAR: Constant Pool Parser                                   ║
-# ╚══════════════════════════════════════════════════════════════╝
 function Get-CpStrings {
     param([byte[]]$b, [int]$MaxStrings = 5000)
     $out = New-Object System.Collections.Generic.List[string]
@@ -215,22 +180,11 @@ function Get-CpStrings {
                     }
                     $off += $len
                 }
-                3 { $off += 4 }
-                4 { $off += 4 }
-                5 { $off += 8; $i++ }
-                6 { $off += 8; $i++ }
-                7 { $off += 2 }
-                8 { $off += 2 }
-                9 { $off += 4 }
-                10 { $off += 4 }
-                11 { $off += 4 }
-                12 { $off += 4 }
-                15 { $off += 3 }
-                16 { $off += 2 }
-                17 { $off += 4 }
-                18 { $off += 4 }
-                19 { $off += 2 }
-                20 { $off += 2 }
+                3 { $off += 4 }; 4 { $off += 4 }
+                5 { $off += 8; $i++ }; 6 { $off += 8; $i++ }
+                7 { $off += 2 }; 8 { $off += 2 }
+                9 { $off += 4 }; 10 { $off += 4 }; 11 { $off += 4 }; 12 { $off += 4 }
+                15 { $off += 3 }; 16 { $off += 2 }; 18 { $off += 4 }
                 default { break }
             }
             $i++
@@ -240,61 +194,41 @@ function Get-CpStrings {
 }
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  JAR: Single-file scan (для Runspace)                        ║
+# ║  JAR ANALYSIS (RunspacePool)                                 ║
 # ╚══════════════════════════════════════════════════════════════╝
 function Invoke-JarScanSingle {
-    param(
-        [string]$JarPath,
-        [string[]]$Definitive,
-        [string[]]$Signatures,
-        [string[]]$Packages,
-        [int]$Threshold
-    )
-    $result = [PSCustomObject]@{
-        Path    = $JarPath
-        Score   = 0
-        Reasons = @()
-        Error   = $null
-    }
+    param($JarPath, $Def, $Sig, $Pkg, $Thr, $Helper)
+    . ([ScriptBlock]::Create($Helper))
+    $result = [PSCustomObject]@{ Path = $JarPath; Score = 0; Reasons = @(); Error = $null }
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-    
     try {
         $zip = [System.IO.Compression.ZipFile]::OpenRead($JarPath)
         $seen = @{}
-        
         foreach ($entry in $zip.Entries) {
             if ($entry.FullName -notmatch '\.class$') { continue }
             $entryLower = $entry.FullName.ToLower()
-            
-            foreach ($pkg in $Packages) {
+            foreach ($pkg in $Pkg) {
                 if ($entryLower -match [regex]::Escape($pkg) -and -not $seen.ContainsKey($pkg)) {
                     $seen[$pkg] = $true
                     $result.Score += 5
-                    $result.Reasons += "Структура клиента: $pkg ($($entry.FullName))"
+                    $result.Reasons += "Структура: $pkg ($($entry.FullName))"
                 }
             }
-            
             try {
-                $s = $entry.Open()
-                $ms = New-Object System.IO.MemoryStream
-                $s.CopyTo($ms)
-                $bytes = $ms.ToArray()
-                $s.Close(); $ms.Close()
-                
+                $s = $entry.Open(); $ms = New-Object System.IO.MemoryStream
+                $s.CopyTo($ms); $bytes = $ms.ToArray(); $s.Close(); $ms.Close()
                 $cp = Get-CpStrings -b $bytes
                 foreach ($str in $cp) {
                     $sl = $str.ToLower()
-                    foreach ($d in $Definitive) {
+                    foreach ($d in $Def) {
                         if ($sl -match $d -and -not $seen.ContainsKey($d)) {
-                            $seen[$d] = $true
-                            $result.Score += 10
+                            $seen[$d] = $true; $result.Score += 10
                             $result.Reasons += "Функция '$d' в $($entry.FullName)"
                         }
                     }
-                    foreach ($sg in $Signatures) {
+                    foreach ($sg in $Sig) {
                         if ($sl -match $sg -and -not $seen.ContainsKey($sg)) {
-                            $seen[$sg] = $true
-                            $result.Score += 3
+                            $seen[$sg] = $true; $result.Score += 3
                             $result.Reasons += "Сигнатура '$sg' в $($entry.FullName)"
                         }
                     }
@@ -302,34 +236,21 @@ function Invoke-JarScanSingle {
             } catch { }
         }
         $zip.Dispose()
-    } catch {
-        $result.Error = $_.Exception.Message
-    }
-    
-    if ($result.Score -lt $Threshold) {
-        $result.Reasons = @()
-    }
+    } catch { $result.Error = $_.Exception.Message }
+    if ($result.Score -lt $Thr) { $result.Reasons = @() }
     return $result
 }
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  JAR: Parallel scan (RunspacePool)                           ║
-# ╚══════════════════════════════════════════════════════════════╝
 function Start-JarScanParallel {
     param([switch]$AllDisks, [switch]$ModsOnly)
-    
-    Write-Log "=== JAR АНАЛИЗ (ПАРАЛЛЕЛЬНЫЙ) ===" "TITLE"
-    
+    Write-Log "=== JAR АНАЛИЗ ===" "TITLE"
     $searchPaths = @()
     if ($AllDisks) {
-        Write-Log "Поиск ВСЕХ .jar на ПК (может занять 1-3 мин)..." "INFO"
         $drives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 }
         foreach ($drive in $drives) {
-            Write-Log "  Сканирую диск $($drive.Name):\" "INFO"
             try {
-                $found = Get-ChildItem -Path "$($drive.Name):\" -Filter "*.jar" -Recurse -ErrorAction SilentlyContinue -Force |
-                         Where-Object { $_.Length -lt ($Config.MaxJarSizeMB * 1MB) }
-                $searchPaths += $found
+                $searchPaths += Get-ChildItem -Path "$($drive.Name):\" -Filter "*.jar" -Recurse -ErrorAction SilentlyContinue -Force |
+                                Where-Object { $_.Length -lt ($Config.MaxJarSizeMB * 1MB) }
             } catch { }
         }
     } elseif ($ModsOnly) {
@@ -339,32 +260,24 @@ function Start-JarScanParallel {
                            Where-Object { $_.Length -lt ($Config.MaxJarSizeMB * 1MB) }
         }
     } else {
-        $paths = @("$env:APPDATA\.minecraft\mods", "$env:APPDATA\.minecraft\versions")
-        foreach ($p in $paths) {
+        foreach ($p in @("$env:APPDATA\.minecraft\mods", "$env:APPDATA\.minecraft\versions")) {
             if (Test-Path $p) {
                 $searchPaths += Get-ChildItem -Path $p -Filter "*.jar" -Recurse -ErrorAction SilentlyContinue |
                                 Where-Object { $_.Length -lt ($Config.MaxJarSizeMB * 1MB) }
             }
         }
     }
-    
     $jars = $searchPaths | Where-Object { -not (Test-Whitelisted -FullPath $_.FullName -Name $_.Name.ToLower()) }
-    Write-Log "Найдено JAR после whitelist: $($jars.Count)" "INFO"
-    
+    Write-Log "Найдено JAR: $($jars.Count)" "INFO"
     if ($jars.Count -eq 0) { Write-Log "Нечего сканировать." "WARN"; return }
-    
-    $cpuCount = [Environment]::ProcessorCount
-    $threads = [Math]::Max(1, [Math]::Min($cpuCount, 8))
-    Write-Log "Использую $threads потоков (CPU: $cpuCount)" "INFO"
-    
+
+    $cpu = [Environment]::ProcessorCount
+    $threads = [Math]::Max(1, [Math]::Min($cpu, 8))
+    Write-Log "Потоков: $threads (CPU: $cpu)" "INFO"
+
     $pool = [RunspaceFactory]::CreateRunspacePool(1, $threads)
     $pool.Open()
-    
-    $definitive = $Script:DefinitiveFuncs
-    $signatures = $Script:SignatureFuncs
-    $packages   = $Script:PackageIndicators
-    $threshold  = $Script:ScoreThreshold
-    
+    $helper = $function:Get-CpStrings.ToString()
     $jobs = @()
     foreach ($jar in $jars) {
         $ps = [PowerShell]::Create()
@@ -372,26 +285,17 @@ function Start-JarScanParallel {
         [void]$ps.AddScript({
             param($JarPath, $Def, $Sig, $Pkg, $Thr, $Helper)
             . ([ScriptBlock]::Create($Helper))
-            Invoke-JarScanSingle -JarPath $JarPath -Definitive $Def -Signatures $Sig -Packages $Pkg -Threshold $Thr
-        }).AddArgument($jar.FullName).AddArgument($definitive).AddArgument($signatures).AddArgument($packages).AddArgument($threshold).AddArgument((Get-Content Function:\Get-CpStrings -ErrorAction SilentlyContinue) + "`n" + (Get-Content Function:\Invoke-JarScanSingle -ErrorAction SilentlyContinue))
-        
-        $jobs += [PSCustomObject]@{
-            PS     = $ps
-            Handle = $ps.BeginInvoke()
-            Jar    = $jar
-        }
+            Invoke-JarScanSingle -JarPath $JarPath -Def $Def -Sig $Sig -Pkg $Pkg -Thr $Thr -Helper $Helper
+        }).AddArgument($jar.FullName).AddArgument($Script:DefinitiveFuncs).AddArgument($Script:SignatureFuncs).AddArgument($Script:PackageIndicators).AddArgument($Script:ScoreThreshold).AddArgument($helper)
+        $jobs += [PSCustomObject]@{ PS = $ps; Handle = $ps.BeginInvoke(); Jar = $jar }
     }
-    
-    $done = 0
-    $flagged = 0
+    $done = 0; $flagged = 0
     foreach ($job in $jobs) {
         $res = $job.PS.EndInvoke($job.Handle)
         $job.PS.Dispose()
         $done++
-        
-        Write-Host "`r  Сканирую $done / $($jobs.Count) — найдено читов: $flagged" -NoNewline -ForegroundColor Gray
-        
-        if ($res -and $res.Score -ge $threshold) {
+        Write-Host "`r  Сканирую $done / $($jobs.Count) — читов: $flagged" -NoNewline -ForegroundColor Gray
+        if ($res -and $res.Score -ge $Script:ScoreThreshold) {
             $flagged++
             Write-Host ""
             Write-Log "ЧИТ: $($res.Path) [score=$($res.Score)]" "FOUND"
@@ -401,93 +305,129 @@ function Start-JarScanParallel {
             }
         }
     }
-    
     $pool.Close(); $pool.Dispose()
     Write-Host ""
-    Write-Log "Просканировано $($jobs.Count) JAR, найдено читов: $flagged" "INFO"
+    Write-Log "Просканировано $($jobs.Count), найдено: $flagged" "INFO"
 }
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  EVERYTHING (с диагностикой)                                 ║
+# ║  PROCESS MEMORY SCANNER (ReadProcessMemory)                  ║
+# ╚══════════════════════════════════════════════════════════════╝
+function Test-ProcessMemory {
+    Write-Log "=== ПАМЯТЬ ПРОЦЕССА (javaw.exe) ===" "TITLE"
+
+    $javaws = Get-Process javaw -ErrorAction SilentlyContinue
+    if (-not $javaws) {
+        Write-Log "javaw.exe не запущен — нечего сканировать в памяти." "WARN"
+        return
+    }
+
+    Add-Type -TypeDefinition @"
+        using System;
+        using System.Runtime.InteropServices;
+        public class MemReader {
+            [DllImport("kernel32.dll", SetLastError=true)]
+            public static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+            [DllImport("kernel32.dll", SetLastError=true)]
+            public static extern bool ReadProcessMemory(IntPtr h, IntPtr addr, byte[] buf, int size, out IntPtr read);
+            [DllImport("kernel32.dll", SetLastError=true)]
+            public static extern bool CloseHandle(IntPtr h);
+            [DllImport("kernel32.dll", SetLastError=true)]
+            public static extern int VirtualQueryEx(IntPtr h, IntPtr addr, out MEMORY_BASIC_INFORMATION mbi, int len);
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MEMORY_BASIC_INFORMATION {
+            public IntPtr BaseAddress;
+            public IntPtr AllocationBase;
+            public uint AllocationProtect;
+            public IntPtr RegionSize;
+            public uint State;
+            public uint Protect;
+            public uint Type;
+        }
+"@
+
+    $patterns = @('l.png','killaura','aimbot','vape','sigma','meteor','hitbox_expand')
+    $PROCESS_QUERY_INFORMATION = 0x0400
+    $PROCESS_VM_READ = 0x0010
+    $MEM_COMMIT = 0x1000
+    $PAGE_READABLE = 0x02, 0x04, 0x20, 0x40  # PAGE_READONLY, READWRITE, EXECUTE_READ, EXECUTE_READWRITE
+
+    foreach ($proc in $javaws) {
+        Write-Log "Сканирую PID $($proc.Id) ($($proc.ProcessName))..." "INFO"
+        $h = [MemReader]::OpenProcess($PROCESS_QUERY_INFORMATION -bor $PROCESS_VM_READ, $false, $proc.Id)
+        if ($h -eq [IntPtr]::Zero) {
+            Write-Log "OpenProcess не удался (нужен запуск от админа?)." "WARN"
+            continue
+        }
+
+        $addr = [IntPtr]::Zero
+        $mbiSize = [System.Runtime.InteropServices.Marshal]::SizeOf([type][MEMORY_BASIC_INFORMATION])
+        $regions = 0
+        $bytesReadTotal = 0
+
+        while ($true) {
+            $mbi = New-Object MEMORY_BASIC_INFORMATION
+            $ret = [MemReader]::VirtualQueryEx($h, $addr, [ref]$mbi, $mbiSize)
+            if ($ret -eq 0) { break }
+            if ($mbi.State -eq $MEM_COMMIT -and ($PAGE_READABLE -contains [int]$mbi.Protect)) {
+                $size = [int]$mbi.RegionSize
+                if ($size -gt 0 -and $size -lt 50MB) {
+                    $buf = New-Object byte[] $size
+                    $read = [IntPtr]::Zero
+                    if ([MemReader]::ReadProcessMemory($h, $mbi.BaseAddress, $buf, $size, [ref]$read)) {
+                        $regions++
+                        $bytesReadTotal += [int]$read
+                        $text = [System.Text.Encoding]::ASCII.GetString($buf, 0, [int]$read)
+                        foreach ($pattern in $patterns) {
+                            if ($text -match [regex]::Escape($pattern)) {
+                                Write-Log "ПАМЯТЬ: найден '$pattern' в PID $($proc.Id) @ $($mbi.BaseAddress)" "FOUND"
+                            }
+                        }
+                    }
+                }
+            }
+            $addr = [IntPtr]::Add($mbi.BaseAddress, $mbi.RegionSize)
+        }
+        [MemControl]::CloseHandle($h) | Out-Null
+        Write-Log "PID $($proc.Id): просканировано $regions регионов, $([math]::Round($bytesReadTotal/1MB,1)) MB" "INFO"
+    }
+}
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  EVERYTHING (диагностика + поиск)                            ║
 # ╚══════════════════════════════════════════════════════════════╝
 function Ensure-Everything {
-    # 1. Процесс уже запущен?
     $proc = Get-Process Everything -ErrorAction SilentlyContinue
-    if ($proc) {
-        Write-Log "Everything.exe запущен (PID $($proc.Id))" "OK"
-    } else {
-        Write-Log "Everything.exe НЕ запущен. Пытаюсь найти и запустить..." "WARN"
-        
+    if (-not $proc) {
+        Write-Log "Everything.exe не запущен. Пытаюсь найти и запустить..." "WARN"
         $candidates = @(
             "C:\Program Files\Everything\Everything.exe",
             "C:\Program Files (x86)\Everything\Everything.exe",
-            "$env:LOCALAPPDATA\Everything\Everything.exe",
-            "$env:USERPROFILE\Downloads\Everything\Everything.exe"
+            "$env:LOCALAPPDATA\Everything\Everything.exe"
         )
         $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-        
         if (-not $found) {
-            Write-Log "Everything не установлен. Скачиваю portable..." "INFO"
-            $dir = "$env:LOCALAPPDATA\Everything"
-            New-Item -ItemType Directory -Path $dir -Force | Out-Null
-            $zip = "$env:TEMP\Everything.zip"
-            try {
-                Invoke-WebRequest -Uri "https://www.voidtools.com/Everything-1.4.1.1026.x64.zip" -OutFile $zip -UseBasicParsing
-                Expand-Archive -Path $zip -DestinationPath $dir -Force
-                Remove-Item $zip -Force
-                $found = Join-Path $dir "Everything.exe"
-            } catch {
-                Write-Log "Не удалось скачать Everything: $_" "WARN"
-                return $false
-            }
-        }
-        
-        try {
-            Start-Process $found -ArgumentList "-startup" -WindowStyle Minimized
-            Write-Log "Запущен $found, жду индексации (20 сек)..." "INFO"
-            for ($i = 0; $i -lt 20; $i++) {
-                Start-Sleep -Seconds 1
-                if (Get-Process Everything -ErrorAction SilentlyContinue) { break }
-            }
-            if (-not (Get-Process Everything -ErrorAction SilentlyContinue)) {
-                Write-Log "Everything не запустился." "WARN"
-                return $false
-            }
-        } catch {
-            Write-Log "Ошибка запуска: $_" "WARN"
+            Write-Log "Everything не установлен." "WARN"
             return $false
         }
+        Start-Process $found -ArgumentList "-startup" -WindowStyle Minimized
+        Start-Sleep -Seconds 10
     }
-    
-    # 2. Проверка es.exe
+
     $es = @(
         "$env:LOCALAPPDATA\Everything\es.exe",
         "C:\Program Files\Everything\es.exe",
         "C:\Program Files (x86)\Everything\es.exe"
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-    
     if (-not $es) {
-        $esCmd = Get-Command es.exe -ErrorAction SilentlyContinue
-        if ($esCmd) { $es = $esCmd.Source }
+        $cmd = Get-Command es.exe -ErrorAction SilentlyContinue
+        if ($cmd) { $es = $cmd.Source }
     }
-    
     if (-not $es) {
-        Write-Log "es.exe не найден рядом с Everything. Скачиваю отдельно..." "INFO"
-        $dir = Split-Path (Get-Process Everything).Path -Parent
-        if (-not $dir -or -not (Test-Path $dir)) { $dir = "$env:LOCALAPPDATA\Everything" }
-        $esZip = "$env:TEMP\ES.zip"
-        try {
-            Invoke-WebRequest -Uri "https://www.voidtools.com/ES-1.1.0.26.zip" -OutFile $esZip -UseBasicParsing
-            Expand-Archive -Path $esZip -DestinationPath $dir -Force
-            Remove-Item $esZip -Force
-            $es = Join-Path $dir "es.exe"
-        } catch {
-            Write-Log "Не удалось скачать es.exe: $_" "WARN"
-            return $false
-        }
+        Write-Log "es.exe не найден." "WARN"
+        return $false
     }
-    
-    Write-Log "es.exe найден: $es" "OK"
     return $es
 }
 
@@ -495,47 +435,44 @@ function Start-EverythingScan {
     Write-Log "=== EVERYTHING ===" "TITLE"
     $es = Ensure-Everything
     if (-not $es) { Write-Log "Everything недоступен." "WARN"; return }
-    
-    # Проверка что es отвечает
-    Write-Log "Проверка es.exe..." "INFO"
-    $version = & $es -version 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Log "es.exe не отвечает: $version" "WARN"
+
+    $ver = & $es -version 2>&1
+    if ($LASTEXITCODE -ne 0) { Write-Log "es.exe не отвечает: $ver" "WARN"; return }
+    Write-Log "es.exe версия: $ver" "OK"
+
+    # Проверка индексации
+    Write-Log "Проверка индексации дисков..." "INFO"
+    $indexed = & $es -path "C:\" -n 1 2>$null
+    if (-not $indexed) {
+        Write-Log "Диск C: не проиндексирован или индекс пуст." "WARN"
+        Write-Log "  → Открой Everything → Tools → Options → Indexes → NTFS" "WARN"
+        Write-Log "  → Убедись, что C: включён и нажми 'Force Rebuild'" "WARN"
+    } else {
+        Write-Log "Индекс C: доступен." "OK"
+    }
+
+    # Экранирование regex
+    $pattern = 'impact|wurst|sigma|meteor|aristois|future|konas|zeusclient|vape|doomsday|nightware|liquidbounce|novoline|astolfo|moonlight|nurik|celestial|expensive'
+    Write-Log "Запрос: $pattern" "INFO"
+    $result = & $es -r $pattern 2>$null
+    if (-not $result) {
+        Write-Log "Совпадений нет. Возможные причины:" "WARN"
+        Write-Log "  1) Индекс не включает нужный диск" "WARN"
+        Write-Log "  2) Файлы были удалены или перемещены" "WARN"
+        Write-Log "  3) Everything не запущен от админа (для системных папок)" "WARN"
         return
     }
-    Write-Log "es.exe версия: $version" "OK"
-    
-    # Запрос
-    $pattern = 'impact|wurst|sigma|meteor|aristois|future|konas|zeusclient|vape|doomsday|nightware|liquidbounce|novoline|astolfo|moonlight|nurik|celestial|expensive|zamorozka|celka|arbuz|britva|bariton|rogalik|haruka|wissend|fluger|vortex|astra|newcode'
-    Write-Log "Запрос: $pattern" "INFO"
-    
-    $result = & $es -r $pattern 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $result) {
-        # Fallback на не-regex запрос
-        Write-Log "Regex не сработал, пробую обычный поиск..." "WARN"
-        $result = & $es $pattern 2>$null
-    }
-    
-    if ($result) {
-        $filtered = $result | Where-Object { $_ -match '\.(exe|jar|zip|rar|dll)$' }
-        if ($filtered) {
-            foreach ($line in $filtered) {
-                Write-Log "НАЙДЕНО: $line" "FOUND"
-            }
-        } else {
-            Write-Log "es выдал $($result.Count) результатов, но ни один не exe/jar/zip/rar/dll" "WARN"
-        }
+
+    $filtered = $result | Where-Object { $_ -match '\.(exe|jar|zip|rar|dll)$' }
+    if ($filtered) {
+        foreach ($line in $filtered) { Write-Log "НАЙДЕНО: $line" "FOUND" }
     } else {
-        Write-Log "Совпадений нет." "OK"
-        Write-Log "Если ты уверен что файлы есть — проверь:" "WARN"
-        Write-Log "  1) Everything индексирует все диски (Tools → Options → Indexes)" "WARN"
-        Write-Log "  2) Индексация NTFS включена (Tools → Options → Indexes → NTFS)" "WARN"
-        Write-Log "  3) Программа запущена от админа (для доступа к системным папкам)" "WARN"
+        Write-Log "es выдал $($result.Count) результатов, но ни один не exe/jar/zip/rar/dll" "WARN"
     }
 }
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  STRINGS (byte-level)                                        ║
+# ║  FILE STRINGS (байтовый поиск)                               ║
 # ╚══════════════════════════════════════════════════════════════╝
 function Find-ByteString {
     param([byte[]]$Haystack, [byte[]]$Needle)
@@ -553,77 +490,39 @@ function Find-ByteString {
 }
 
 function Test-Strings {
-    Write-Log "=== STRINGS SCAN ===" "TITLE"
-    
-    # Ищем javaw.exe везде
-    Write-Log "Поиск javaw.exe..." "INFO"
+    Write-Log "=== СТРОКИ В ФАЙЛАХ ===" "TITLE"
+    $targets = @(
+        @{ Path = "$env:WINDIR\explorer.exe"; Patterns = @("deltadlc","nursultam","celestial") }
+    )
     $javaPaths = @()
     $candidates = @(
-        "$env:WINDIR\System32\javaw.exe",
-        "C:\Program Files\Java",
-        "C:\Program Files\Eclipse Adoptium",
-        "C:\Program Files\AdoptOpenJDK",
-        "$env:APPDATA\.minecraft\runtime",
-        "$env:LOCALAPPDATA\Programs\Eclipse Adoptium",
-        "$env:USERPROFILE\.jdks"
+        "C:\Program Files\Java","C:\Program Files\Eclipse Adoptium",
+        "$env:APPDATA\.minecraft\runtime","$env:USERPROFILE\.jdks"
     )
     foreach ($c in $candidates) {
         if (Test-Path $c) {
-            if ($c -match '\.exe$') { $javaPaths += $c }
-            else {
-                $found = Get-ChildItem -Path $c -Filter "javaw.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 3
-                $javaPaths += $found.FullName
-            }
+            $javaPaths += (Get-ChildItem -Path $c -Filter "javaw.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 3).FullName
         }
     }
-    $javaPaths = $javaPaths | Select-Object -Unique
-    
-    if ($javaPaths) {
-        Write-Log "Найдено javaw.exe: $($javaPaths.Count)" "OK"
-    } else {
-        Write-Log "javaw.exe не найден (Java может быть не установлена)" "WARN"
-    }
-    
-    $targets = @()
-    $targets += @{ Path = "$env:WINDIR\explorer.exe"; Patterns = @("deltadlc","nursultam","celestial","cheat","impact") }
-    foreach ($jp in $javaPaths) {
+    foreach ($jp in ($javaPaths | Select-Object -Unique)) {
         $targets += @{ Path = $jp; Patterns = @("l.png","killaura","vape","sigma","meteor") }
     }
-    
     foreach ($t in $targets) {
         if (-not (Test-Path $t.Path)) { continue }
         $size = (Get-Item $t.Path).Length / 1MB
-        if ($size -gt 100) { Write-Log "Пропуск $($t.Path) ($([math]::Round($size))MB > 100MB)" "WARN"; continue }
-        
+        if ($size -gt 100) { Write-Log "Пропуск $($t.Path) ($([math]::Round($size))MB)" "WARN"; continue }
         Write-Log "Читаю $($t.Path) ($([math]::Round($size,2))MB)..." "INFO"
-        try {
-            $bytes = [System.IO.File]::ReadAllBytes($t.Path)
-        } catch {
-            Write-Log "Ошибка чтения: $_" "WARN"; continue
-        }
-        
-        $anyFound = $false
+        try { $bytes = [System.IO.File]::ReadAllBytes($t.Path) } catch { Write-Log "Ошибка чтения: $_" "WARN"; continue }
+        $found = $false
         foreach ($pattern in $t.Patterns) {
-            # ASCII поиск
-            $asciiBytes = [System.Text.Encoding]::ASCII.GetBytes($pattern)
-            $idxA = Find-ByteString -Haystack $bytes -Needle $asciiBytes
-            
-            # UTF-16LE поиск
-            $unicodeBytes = [System.Text.Encoding]::Unicode.GetBytes($pattern)
-            $idxU = Find-ByteString -Haystack $bytes -Needle $unicodeBytes
-            
-            if ($idxA -ge 0) {
-                Write-Log "ASCII '$pattern' найден в $([System.IO.Path]::GetFileName($t.Path)) @ offset $idxA" "FOUND"
-                $anyFound = $true
-            }
-            if ($idxU -ge 0) {
-                Write-Log "UTF-16 '$pattern' найден в $([System.IO.Path]::GetFileName($t.Path)) @ offset $idxU" "FOUND"
-                $anyFound = $true
-            }
+            $a = [System.Text.Encoding]::ASCII.GetBytes($pattern)
+            $u = [System.Text.Encoding]::Unicode.GetBytes($pattern)
+            $ia = Find-ByteString -Haystack $bytes -Needle $a
+            $iu = Find-ByteString -Haystack $bytes -Needle $u
+            if ($ia -ge 0) { Write-Log "ASCII '$pattern' в $([System.IO.Path]::GetFileName($t.Path)) @ $ia" "FOUND"; $found = $true }
+            if ($iu -ge 0) { Write-Log "UTF-16 '$pattern' в $([System.IO.Path]::GetFileName($t.Path)) @ $iu" "FOUND"; $found = $true }
         }
-        if (-not $anyFound) {
-            Write-Log "$([System.IO.Path]::GetFileName($t.Path)): чисто" "OK"
-        }
+        if (-not $found) { Write-Log "$([System.IO.Path]::GetFileName($t.Path)): чисто" "OK" }
     }
 }
 
@@ -645,20 +544,16 @@ function Test-Processes {
     Write-Log "=== ПРОЦЕССЫ ===" "TITLE"
     $pattern = ($Script:CheatNames -join '|')
     $found = Get-Process | Where-Object { $_.ProcessName -match $pattern }
-    if ($found) {
-        foreach ($p in $found) { Write-Log "ПРОЦЕСС: $($p.ProcessName) (PID $($p.Id))" "FOUND" }
-    } else { Write-Log "Подозрительных процессов нет." "OK" }
+    if ($found) { foreach ($p in $found) { Write-Log "ПРОЦЕСС: $($p.ProcessName) (PID $($p.Id))" "FOUND" } }
+    else { Write-Log "Подозрительных процессов нет." "OK" }
 }
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  BAM                                                         ║
+# ║  BAM / PREFETCH / AMCACHE                                    ║
 # ╚══════════════════════════════════════════════════════════════╝
 function Test-BAM {
     Write-Log "=== BAM ===" "TITLE"
-    $paths = @(
-        "HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings",
-        "HKLM:\SYSTEM\CurrentControlSet\Services\bam\UserSettings"
-    )
+    $paths = @("HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings","HKLM:\SYSTEM\CurrentControlSet\Services\bam\UserSettings")
     $found = $false
     foreach ($bamPath in $paths) {
         if (-not (Test-Path $bamPath)) { continue }
@@ -667,10 +562,7 @@ function Test-BAM {
             foreach ($p in $vals.PSObject.Properties) {
                 if ($p.Name -match '\\') {
                     foreach ($cheat in $Script:CheatNames) {
-                        if ($p.Name -match [regex]::Escape($cheat)) {
-                            Write-Log "BAM: $($p.Name)" "FOUND"
-                            $found = $true
-                        }
+                        if ($p.Name -match [regex]::Escape($cheat)) { Write-Log "BAM: $($p.Name)" "FOUND"; $found = $true }
                     }
                 }
             }
@@ -679,131 +571,62 @@ function Test-BAM {
     if (-not $found) { Write-Log "BAM: чисто" "OK" }
 }
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  PREFETCH                                                    ║
-# ╚══════════════════════════════════════════════════════════════╝
 function Test-Prefetch {
     Write-Log "=== PREFETCH ===" "TITLE"
     $pfDir = "$env:WINDIR\Prefetch"
-    if (-not (Test-Path $pfDir)) { Write-Log "Prefetch отключён или недоступен." "WARN"; return }
-    
+    if (-not (Test-Path $pfDir)) { Write-Log "Prefetch недоступен." "WARN"; return }
     $files = Get-ChildItem $pfDir -Filter "*.pf" -ErrorAction SilentlyContinue
-    Write-Log "Найдено .pf файлов: $($files.Count)" "INFO"
+    Write-Log "Файлов .pf: $($files.Count)" "INFO"
     $found = $false
     foreach ($f in $files) {
         $name = $f.Name.ToLower()
         foreach ($cheat in $Script:CheatNames) {
-            if ($name -match [regex]::Escape($cheat)) {
-                Write-Log "PREFETCH: $($f.Name)" "FOUND"
-                $found = $true
-            }
+            if ($name -match [regex]::Escape($cheat)) { Write-Log "PREFETCH: $($f.Name)" "FOUND"; $found = $true }
         }
     }
     if (-not $found) { Write-Log "Prefetch: чисто" "OK" }
 }
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  AMCACHE                                                     ║
-# ╚══════════════════════════════════════════════════════════════╝
 function Test-Amcache {
     Write-Log "=== AMCACHE ===" "TITLE"
-    $amcache = "C:\Windows\AppCompat\Programs\Amcache.hve"
-    if (-not (Test-Path $amcache)) { Write-Log "Amcache.hve не найден." "WARN"; return }
-    
-    # Amcache.hve — это реестр, требует загрузки. Упрощённо: ищем по strings
-    Write-Log "Читаю Amcache.hve (поиск сигнатур в бинарнике)..." "INFO"
+    $path = "C:\Windows\AppCompat\Programs\Amcache.hve"
+    if (-not (Test-Path $path)) { Write-Log "Amcache.hve не найден." "WARN"; return }
+    Write-Log "Читаю Amcache.hve..." "INFO"
     try {
-        $bytes = [System.IO.File]::ReadAllBytes($amcache)
+        $bytes = [System.IO.File]::ReadAllBytes($path)
         $found = $false
         foreach ($cheat in $Script:CheatNames) {
-            $asciiBytes = [System.Text.Encoding]::Unicode.GetBytes($cheat)
-            if ((Find-ByteString -Haystack $bytes -Needle $asciiBytes) -ge 0) {
-                Write-Log "AMCACHE: найден '$cheat'" "FOUND"
-                $found = $true
+            $unicode = [System.Text.Encoding]::Unicode.GetBytes($cheat)
+            if ((Find-ByteString -Haystack $bytes -Needle $unicode) -ge 0) {
+                Write-Log "AMCACHE: '$cheat'" "FOUND"; $found = $true
             }
         }
         if (-not $found) { Write-Log "Amcache: чисто" "OK" }
-    } catch {
-        Write-Log "Ошибка чтения Amcache: $_" "WARN"
-    }
+    } catch { Write-Log "Ошибка Amcache: $_" "WARN" }
 }
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  RECENTDOCS                                                  ║
-# ╚══════════════════════════════════════════════════════════════╝
-function Test-RecentDocs {
-    Write-Log "=== RECENT DOCS ===" "TITLE"
-    $recent = "$env:APPDATA\Microsoft\Windows\Recent"
-    if (-not (Test-Path $recent)) { Write-Log "Recent не найден." "WARN"; return }
-    
-    $files = Get-ChildItem $recent -ErrorAction SilentlyContinue
-    $found = $false
-    foreach ($f in $files) {
-        foreach ($cheat in $Script:CheatNames) {
-            if ($f.Name -match [regex]::Escape($cheat)) {
-                Write-Log "RECENT: $($f.Name)" "FOUND"
-                $found = $true
-            }
-        }
-    }
-    if (-not $found) { Write-Log "Recent: чисто" "OK" }
-}
-
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  DNS + hosts + TCP                                           ║
+# ║  NETWORK                                                     ║
 # ╚══════════════════════════════════════════════════════════════╝
 function Test-Network {
     Write-Log "=== СЕТЬ ===" "TITLE"
-    
-    # hosts
     $hosts = "$env:WINDIR\System32\drivers\etc\hosts"
     if (Test-Path $hosts) {
         $content = Get-Content $hosts -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' }
-        if ($content) {
-            Write-Log "hosts-файл содержит записи:" "WARN"
-            foreach ($line in $content) { Write-Log "  $line" "WARN" }
-        } else {
-            Write-Log "hosts-файл пуст (стандартно)" "OK"
-        }
+        if ($content) { Write-Log "hosts:" "WARN"; foreach ($l in $content) { Write-Log "  $l" "WARN" } }
+        else { Write-Log "hosts пуст." "OK" }
     }
-    
-    # DNS cache — подозрительные домены
-    $suspiciousDomains = 'vape|impact|wurst|sigma|meteor|aristois|konas|zeus|doomsday|liquidbounce|novoline|astolfo|moonlight'
+    $susp = 'vape|impact|wurst|sigma|meteor|aristois|konas|zeus|doomsday|liquidbounce|novoline|astolfo|moonlight'
     try {
-        $dns = Get-DnsClientCache -ErrorAction SilentlyContinue | Where-Object { $_.Entry -match $suspiciousDomains }
+        $dns = Get-DnsClientCache -ErrorAction SilentlyContinue | Where-Object { $_.Entry -match $susp }
         if ($dns) { foreach ($d in $dns) { Write-Log "DNS: $($d.Entry) -> $($d.Data)" "FOUND" } }
-        else { Write-Log "DNS cache: чисто" "OK" }
-    } catch { Write-Log "DNS cache недоступен" "WARN" }
-    
-    # TCP
-    try {
-        $conns = Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue |
-                 Where-Object { $_.RemotePort -in @(25565, 25566, 19132) }
-        if ($conns) {
-            foreach ($c in $conns) { Write-Log "TCP: $($c.RemoteAddress):$($c.RemotePort) (PID $($c.OwningProcess))" "INFO" }
-        } else { Write-Log "TCP: нет подключений к MC-портам" "OK" }
+        else { Write-Log "DNS: чисто." "OK" }
     } catch { }
-}
-
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  SCHEDULED TASKS                                             ║
-# ╚══════════════════════════════════════════════════════════════╝
-function Test-ScheduledTasks {
-    Write-Log "=== SCHEDULED TASKS ===" "TITLE"
     try {
-        $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue
-        $found = $false
-        foreach ($t in $tasks) {
-            $actionStr = ($t.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ' '
-            foreach ($cheat in $Script:CheatNames) {
-                if ($actionStr -match [regex]::Escape($cheat)) {
-                    Write-Log "TASK: $($t.TaskName) -> $actionStr" "FOUND"
-                    $found = $true
-                }
-            }
-        }
-        if (-not $found) { Write-Log "Scheduled tasks: чисто" "OK" }
-    } catch { Write-Log "Scheduled tasks недоступны" "WARN" }
+        $conns = Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue | Where-Object { $_.RemotePort -in @(25565,25566,19132) }
+        if ($conns) { foreach ($c in $conns) { Write-Log "TCP: $($c.RemoteAddress):$($c.RemotePort) (PID $($c.OwningProcess))" "INFO" } }
+        else { Write-Log "TCP: нет MC-подключений." "OK" }
+    } catch { }
 }
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -834,7 +657,7 @@ function Send-Report {
 # ║  MAIN LOOP                                                   ║
 # ╚══════════════════════════════════════════════════════════════╝
 Show-Banner
-$Script:Report.Add("=== ENGINE CHECK v5.0 ===")
+$Script:Report.Add("=== ENGINE CHECK v6.0 ===")
 $Script:Report.Add("Дата: $(Get-Date)")
 $Script:Report.Add("ПК: $env:COMPUTERNAME")
 $Script:Report.Add("")
@@ -845,20 +668,13 @@ while (-not $exit) {
     $c = Read-Host "  Выбор"
     $Script:StartTime = Get-Date
     switch ($c) {
-        "1" {
-            Test-Services; Test-Processes
-            Start-JarScanParallel
-            Start-EverythingScan
-            Test-Strings
-            Test-BAM; Test-Prefetch; Test-Amcache; Test-RecentDocs
-            Test-Network; Test-ScheduledTasks
-        }
+        "1" { Test-Services; Test-Processes; Start-JarScanParallel; Test-ProcessMemory; Start-EverythingScan; Test-Strings; Test-BAM; Test-Prefetch; Test-Amcache; Test-Network }
         "2" { Start-JarScanParallel -ModsOnly }
         "3" { Start-JarScanParallel -AllDisks }
-        "4" { Test-Services; Test-Processes }
+        "4" { Test-Processes; Test-ProcessMemory }
         "5" { Start-EverythingScan }
         "6" { Test-Strings }
-        "7" { Test-BAM; Test-Prefetch; Test-Amcache; Test-RecentDocs; Test-ScheduledTasks }
+        "7" { Test-BAM; Test-Prefetch; Test-Amcache }
         "8" { Test-Network }
         "9" { Send-Report }
         "0" { $exit = $true; continue }
