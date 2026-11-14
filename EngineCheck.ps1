@@ -1,42 +1,43 @@
 <#
 .SYNOPSIS
-    EngineCheck - ScreenShare Checker for Minecraft
+    EngineCheck v3.0 - Interactive ScreenShare Checker
 .DESCRIPTION
-    Single-file checker. Run via: irm <raw-url> | iex
-    Modules: Services, Processes, JAR Analysis, Strings Scan, Network, Telegram Report.
+    Menu-driven checker with precise signatures to avoid false positives.
+    Run via: irm <raw-url> | iex
 #>
 
 # ============================================================
-# CONFIGURATION (заполни перед использованием)
+# CONFIGURATION
 # ============================================================
 $Config = @{
     TelegramBotToken = "ТВОЙ_ТОКЕН_БОТА"
     TelegramChatId   = "ТВОЙ_CHAT_ID"
-    MaxJarSizeMB     = 50
-    ScanTimeoutSec   = 600
+    MaxJarSizeMB     = 100
 }
 
 # ============================================================
-# CHEAT SIGNATURES (из твоего списка)
+# PRECISE SIGNATURE DATABASE (Только читерские функции)
 # ============================================================
 $Script:CheatNames = @(
-    "impact","wurst","bleachhack","bleach_hack","aristois","huzuni","skillclient","skill_client",
-    "nodus","inertia","ares","sigma","meteor","atomic","zamorozka","liquidbounce","liquid_bounce",
-    "nurik","nursultan","celestial","calestial","celka","expensive","neverhook","excellent",
-    "wexside","wild","minced","deadcode","akrien","future","dreampool","vape","infinity",
-    "squad","norules","no_rules","konas","zeusclient","zeus_client","richclient","rich_client",
-    "ghostclient","ghost_client","rusherhack","rusher_hack","thunderhack","thunder_hack",
-    "moonhack","moon_hack","winner","nova","exire","doomsday","nightware","ricardo","extazyy",
-    "troxill","arbuz","dauntiblyat","takker","faker","xameleon","fuzeclient","fuze_client",
-    "wisefolder","wise_folder","netlimiter","net_limiter","feather","delta","eclipse","venus",
-    "jex","hakari","hush","hach","rogalik","catlavan","haruka","wissend","fluger","sperma",
-    "vortex","newcode","astra","britva","bariton","luminex","nuclear"
+    "impact","wurst","bleachhack","aristois","huzuni","skillclient","nodus","inertia",
+    "ares","sigma","meteor","atomic","zamorozka","liquidbounce","nurik","celestial",
+    "expensive","neverhook","wexside","future","dreampool","vape","konas","zeusclient",
+    "richclient","ghostclient","rusherhack","thunderhack","moonhack","exire","doomsday",
+    "nightware","extazyy","arbuz","xameleon","feather","delta","eclipse","venus","jex",
+    "hakari","hush","rogalik","catlavan","haruka","wissend","fluger","vortex","astra",
+    "britva","bariton","luminex","nuclear"
 )
 
+# Только специфичные строки, которые вряд ли встретятся в легитимных модах
 $Script:CheatStrings = @(
-    "killaura","aimbot","aimassist","hitbox","autototem","auto_totem","reach","velocity",
-    "antiknockback","nuker","scaffold","fly","speed","esp","tracers","xray","x_ray",
-    "cheat","hack","inject","bypass","anticheat"
+    "killaura", "kill_aura", "aimbot", "aim_assist", "aimassist",
+    "hitbox_expand", "hitboxexpand", "reach_hack", "reachhack",
+    "autototem", "auto_totem", "autocrystal", "auto_crystal",
+    "antiknockback", "anti_knockback", "velocity_mod",
+    "nuker", "scaffold_walk", "scaffoldwalk",
+    "xray", "x_ray", "tracers", "backtrack", "nofall", "no_fall",
+    "fastplace", "fast_place", "fastbreak", "fast_break",
+    "pingspoof", "ping_spoof", "critical_hit", "criticalhit"
 )
 
 $Script:RequiredServices = @("Sysmain","Diagtrack","PcaSvc","DPS","Eventlog","AppInfo")
@@ -50,30 +51,22 @@ $Script:ThreatsFound = 0
 function Write-Banner {
     Clear-Host
     $banner = @"
-╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║   ███████╗███╗   ██╗ ██████╗ ██╗███╗   ██╗███████╗           ║
-║   ██╔════╝████╗  ██║██╔════╝ ██║████╗  ██║██╔════╝           ║
-║   █████╗  ██╔██╗ ██║██║  ███╗██║██╔██╗ ██║█████╗             ║
-║   ██╔══╝  ██║╚██╗██║██║   ██║██║██║╚██╗██║██╔══╝             ║
-║   ███████╗██║ ╚████║╚██████╔╝██║██║ ╚████║███████╗           ║
-║   ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝╚═╝  ╚═══╝╚══════╝           ║
-║                                                              ║
-║              SCREENSHARE CHECKER v1.0                        ║
-║              Minecraft Cheat Detection                       ║
-║                                                              ║
-╚══════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                      ║
+║   ███████╗███╗   ██╗ ██████╗ ██╗███╗   ██╗███████╗                   ║
+║   ██╔════╝████╗  ██║██╔════╝ ██║████╗  ██║██╔════╝                   ║
+║   █████╗  ██╔██╗ ██║██║  ███╗██║██╔██╗ ██║█████╗                     ║
+║   ██╔══╝  ██║╚██╗██║██║   ██║██║██║╚██╗██║██╔══╝                     ║
+║   ███████╗██║ ╚████║╚██████╔╝██║██║ ╚████║███████╗                   ║
+║   ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝╚═╝  ╚═══╝╚══════╝                   ║
+║                                                                      ║
+║              ENGINE CHECK v3.0 - INTERACTIVE                         ║
+║              Precise Detection | No False Positives                  ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
 "@
     Write-Host $banner -ForegroundColor Cyan
     Write-Host ""
-}
-
-function Write-Section {
-    param([string]$Title)
-    Write-Host ""
-    Write-Host "┌─────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-    Write-Host "│ $($Title.PadRight(59)) │" -ForegroundColor DarkCyan
-    Write-Host "└─────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
 }
 
 function Write-Result {
@@ -93,60 +86,182 @@ function Write-Result {
     }
 }
 
-function Write-Progress-Bar {
-    param([int]$Current, [int]$Total, [string]$Activity)
-    $percent = [math]::Round(($Current / $Total) * 100)
-    $filled = [math]::Round($percent / 5)
-    $bar = ("█" * $filled).PadRight(20, "░")
-    Write-Host "`r  [$bar] $percent% - $Activity" -NoNewline -ForegroundColor Cyan
+# ============================================================
+# MENU SYSTEM
+# ============================================================
+function Show-MainMenu {
+    Write-Host ""
+    Write-Host "  ┌─────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
+    Write-Host "  │                    ВЫБЕРИТЕ ДЕЙСТВИЕ                    │" -ForegroundColor DarkCyan
+    Write-Host "  ├─────────────────────────────────────────────────────────┤" -ForegroundColor DarkCyan
+    Write-Host "  │  [1] Полный скан (все проверки по очереди)              │" -ForegroundColor White
+    Write-Host "  │  [2] Только JAR анализ (поиск читов в .jar)             │" -ForegroundColor White
+    Write-Host "  │  [3] Только службы (Services)                           │" -ForegroundColor White
+    Write-Host "  │  [4] Только процессы (Processes)                        │" -ForegroundColor White
+    Write-Host "  │  [5] Только Everything (поиск файлов по диску)          │" -ForegroundColor White
+    Write-Host "  │  [6] Только строки (explorer.exe / javaw.exe)           │" -ForegroundColor White
+    Write-Host "  │  [7] Отправить отчёт в Telegram                         │" -ForegroundColor White
+    Write-Host "  │  [0] Выход                                              │" -ForegroundColor White
+    Write-Host "  └─────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
+    Write-Host ""
 }
 
 # ============================================================
-# MODULE 1: SERVICES
+# EVERYTHING AUTO-INSTALL & SCAN
+# ============================================================
+function Install-EverythingCLI {
+    Write-Result "Everything CLI не найден. Скачиваю..." "INFO"
+    
+    $installDir = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
+    if (-not (Test-Path $installDir)) {
+        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    }
+    
+    $esPath = Join-Path $installDir "es.exe"
+    
+    # Прямая ссылка на x64 версию ES с GitHub
+    $downloadUrl = "https://github.com/voidtools/ES/releases/download/1.1.0.37/ES-1.1.0.37.x64.zip"
+    $zipPath = "$env:TEMP\ES.zip"
+    
+    try {
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing
+        Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
+        $extractedEs = Get-ChildItem -Path $env:TEMP -Filter "es.exe" -Recurse | Select-Object -First 1
+        
+        if ($extractedEs) {
+            Copy-Item -Path $extractedEs.FullName -Destination $esPath -Force
+            Write-Result "Everything CLI установлен в $esPath" "OK"
+            return $esPath
+        } else {
+            Write-Result "Не удалось найти es.exe в архиве." "WARN"
+            return $null
+        }
+    } catch {
+        Write-Result "Ошибка скачивания Everything CLI: $_" "WARN"
+        return $null
+    } finally {
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-EsPath {
+    $esPath = Get-Command "es.exe" -ErrorAction SilentlyContinue
+    if ($esPath) { return $esPath.Source }
+    
+    $localEs = "$env:LOCALAPPDATA\Microsoft\WindowsApps\es.exe"
+    if (Test-Path $localEs) { return $localEs }
+    
+    return (Install-EverythingCLI)
+}
+
+function Start-EverythingScan {
+    Write-Result "=== EVERYTHING SCAN ===" "INFO"
+    $esPath = Get-EsPath
+    if (-not $esPath) {
+        Write-Result "Everything CLI недоступен. Пропускаю." "WARN"
+        return
+    }
+    
+    $regex = ($Script:CheatNames -join "|")
+    $query = "ext:exe;jar;zip;rar regex:$regex"
+    
+    try {
+        Write-Result "Запуск поиска Everything..." "INFO"
+        $result = & $esPath -regex $query 2>$null
+        
+        if ($result) {
+            foreach ($line in $result) {
+                Write-Result "EVERYTHING: $line" "FOUND"
+            }
+        } else {
+            Write-Result "Everything: совпадений не найдено." "OK"
+        }
+    } catch {
+        Write-Result "Ошибка Everything: $_" "WARN"
+    }
+}
+
+# ============================================================
+# SERVICES CHECK
 # ============================================================
 function Test-Services {
-    Write-Section "MODULE 1: SERVICES CHECK"
+    Write-Result "=== ПРОВЕРКА СЛУЖБ ===" "INFO"
     $i = 0
     foreach ($svc in $Script:RequiredServices) {
         $i++
-        Write-Progress-Bar -Current $i -Total $Script:RequiredServices.Count -Activity "Checking $svc"
+        Write-Host "`r  Проверка $svc ($i/$($Script:RequiredServices.Count))..." -NoNewline -ForegroundColor Gray
         try {
             $service = Get-Service -Name $svc -ErrorAction Stop
             if ($service.Status -eq 'Running') {
-                Write-Result "Service $svc : RUNNING" "OK"
+                Write-Result "Служба $svc : RUNNING" "OK"
             } else {
-                Write-Result "Service $svc : $($service.Status) (SUSPICIOUS)" "FOUND"
+                Write-Result "Служба $svc : $($service.Status) (ПОДОЗРИТЕЛЬНО)" "FOUND"
             }
         } catch {
-            Write-Result "Service $svc : NOT FOUND (SUSPICIOUS)" "FOUND"
+            Write-Result "Служба $svc : НЕ НАЙДЕНА (ПОДОЗРИТЕЛЬНО)" "FOUND"
         }
     }
     Write-Host ""
 }
 
 # ============================================================
-# MODULE 2: PROCESSES
+# PROCESS SCAN
 # ============================================================
 function Test-Processes {
-    Write-Section "MODULE 2: PROCESS SCAN"
+    Write-Result "=== ПРОВЕРКА ПРОЦЕССОВ ===" "INFO"
     $pattern = ($Script:CheatNames -join "|")
     $processes = Get-Process | Where-Object { $_.ProcessName -match $pattern }
     
     if ($processes) {
         foreach ($proc in $processes) {
-            Write-Result "FOUND PROCESS: $($proc.ProcessName) (PID: $($proc.Id))" "FOUND"
+            Write-Result "НАЙДЕН ПРОЦЕСС: $($proc.ProcessName) (PID: $($proc.Id))" "FOUND"
         }
     } else {
-        Write-Result "No suspicious processes found." "OK"
+        Write-Result "Подозрительных процессов не найдено." "OK"
     }
     Write-Host ""
 }
 
 # ============================================================
-# MODULE 3: JAR ANALYZER
+# DEEP JAR ANALYZER
 # ============================================================
-function Test-Jars {
-    Write-Section "MODULE 3: JAR ANALYSIS"
+function Get-ConstantPoolStrings {
+    param([byte[]]$ClassBytes)
+    $strings = New-Object System.Collections.Generic.List[string]
+    try {
+        if ($ClassBytes.Length -lt 10) { return $strings }
+        $offset = 8
+        $cpCount = [int]($ClassBytes[$offset] -shl 8) -bor $ClassBytes[$offset + 1]
+        $offset += 2
+        $i = 1
+        while ($i -lt $cpCount) {
+            if ($offset -ge $ClassBytes.Length) { break }
+            $tag = $ClassBytes[$offset]; $offset++
+            switch ($tag) {
+                1 { 
+                    if ($offset + 2 -gt $ClassBytes.Length) { break }
+                    $len = [int]($ClassBytes[$offset] -shl 8) -bor $ClassBytes[$offset + 1]
+                    $offset += 2
+                    if ($offset + $len -le $ClassBytes.Length) {
+                        $strings.Add([System.Text.Encoding]::UTF8.GetString($ClassBytes, $offset, $len))
+                    }
+                    $offset += $len
+                }
+                3 { $offset += 4 }; 4 { $offset += 4 }
+                5 { $offset += 8; $i++ }; 6 { $offset += 8; $i++ }
+                7 { $offset += 2 }; 8 { $offset += 2 }
+                9 { $offset += 4 }; 10 { $offset += 4 }; 11 { $offset += 4 }; 12 { $offset += 4 }
+                15 { $offset += 3 }; 16 { $offset += 2 }; 18 { $offset += 4 }
+                default { break }
+            }
+            $i++
+        }
+    } catch { }
+    return $strings
+}
+
+function Start-JarScan {
+    Write-Result "=== JAR АНАЛИЗ ===" "INFO"
     
     $searchPaths = @(
         "$env:APPDATA\.minecraft",
@@ -157,7 +272,7 @@ function Test-Jars {
     ) | Where-Object { Test-Path $_ }
     
     if ($searchPaths.Count -eq 0) {
-        Write-Result "No Minecraft/download folders found." "WARN"
+        Write-Result "Папки Minecraft/загрузок не найдены." "WARN"
         return
     }
     
@@ -168,231 +283,156 @@ function Test-Jars {
         $jars += $found
     }
     
-    Write-Result "Found $($jars.Count) JAR files to scan." "INFO"
-    
+    Write-Result "Найдено JAR файлов: $($jars.Count)" "INFO"
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     
     $suspiciousCount = 0
     $i = 0
     foreach ($jar in $jars) {
         $i++
-        Write-Progress-Bar -Current $i -Total $jars.Count -Activity "Scanning $($jar.Name)"
+        Write-Host "`r  Сканирую $i из $($jars.Count): $($jar.Name)" -NoNewline -ForegroundColor Gray
         
         try {
             $zip = [System.IO.Compression.ZipFile]::OpenRead($jar.FullName)
             $jarName = $jar.Name.ToLower()
-            $isSuspicious = $false
             $reasons = @()
             
             foreach ($cheat in $Script:CheatNames) {
                 if ($jarName -match [regex]::Escape($cheat)) {
-                    $reasons += "Name contains: $cheat"
-                    $isSuspicious = $true
+                    $reasons += "Имя JAR содержит: $cheat"
                 }
             }
             
             foreach ($entry in $zip.Entries) {
-                $entryName = $entry.FullName.ToLower()
-                
-                if ($entryName -match "\.class$") {
-                    foreach ($str in $Script:CheatStrings) {
-                        if ($entryName -match [regex]::Escape($str)) {
-                            $reasons += "Class: $($entry.FullName) contains '$str'"
-                            $isSuspicious = $true
-                            break
+                if ($entry.FullName -match "\.class$") {
+                    try {
+                        $stream = $entry.Open()
+                        $ms = New-Object System.IO.MemoryStream
+                        $stream.CopyTo($ms)
+                        $classBytes = $ms.ToArray()
+                        $stream.Close(); $ms.Close()
+                        
+                        $cpStrings = Get-ConstantPoolStrings -ClassBytes $classBytes
+                        foreach ($str in $cpStrings) {
+                            foreach ($sig in $Script:CheatStrings) {
+                                if ($str -match [regex]::Escape($sig)) {
+                                    $reasons += "Класс $($entry.FullName) содержит строку: '$str'"
+                                    break
+                                }
+                            }
                         }
-                    }
-                }
-                
-                if ($entryName -match "^[a-z]\.class$" -or $entryName -match "^[a-z]{2}\.class$") {
-                    $reasons += "Possible obfuscation: $($entry.FullName)"
-                    $isSuspicious = $true
+                    } catch { }
                 }
             }
             
             $zip.Dispose()
             
-            if ($isSuspicious) {
+            if ($reasons.Count -gt 0) {
                 $suspiciousCount++
                 Write-Host ""
-                Write-Result "SUSPICIOUS JAR: $($jar.FullName)" "FOUND"
+                Write-Result "ПОДОЗРИТЕЛЬНЫЙ JAR: $($jar.FullName)" "FOUND"
                 foreach ($r in $reasons | Select-Object -First 5) {
                     Write-Host "      -> $r" -ForegroundColor DarkRed
-                    $Script:Report.Add("      -> $r")
                 }
             }
-        } catch {
-            Write-Result "Error reading $($jar.Name): $($_.Exception.Message)" "WARN"
-        }
+        } catch { }
     }
     
     Write-Host ""
     if ($suspiciousCount -eq 0) {
-        Write-Result "No suspicious JARs found (scanned $($jars.Count))." "OK"
+        Write-Result "Подозрительных JAR не найдено (проверено $($jars.Count))." "OK"
     } else {
-        Write-Result "TOTAL SUSPICIOUS JARS: $suspiciousCount" "FOUND"
+        Write-Result "ВСЕГО ПОДОЗРИТЕЛЬНЫХ JAR: $suspiciousCount" "FOUND"
     }
-    Write-Host ""
 }
 
 # ============================================================
-# MODULE 4: STRINGS SCAN
+# STRINGS SCAN
 # ============================================================
 function Test-Strings {
-    Write-Section "MODULE 4: STRINGS SCAN"
-    
+    Write-Result "=== СТРОКИ (explorer/javaw) ===" "INFO"
     $targets = @(
-        @{ Path = "$env:WINDIR\explorer.exe"; Patterns = @("deltadlc","wild","nursultam","celestial","aspect","toshiba") },
+        @{ Path = "$env:WINDIR\explorer.exe"; Patterns = @("deltadlc","nursultam","celestial") },
         @{ Path = "$env:WINDIR\System32\javaw.exe"; Patterns = @("l.png") }
     )
-    
     foreach ($target in $targets) {
-        if (-not (Test-Path $target.Path)) {
-            Write-Result "File not found: $($target.Path)" "WARN"
-            continue
-        }
-        
+        if (-not (Test-Path $target.Path)) { continue }
         try {
-            $fileInfo = Get-Item $target.Path
-            if ($fileInfo.Length -gt 50MB) {
-                Write-Result "File too large, skipping: $($fileInfo.Name)" "WARN"
-                continue
-            }
-            
             $bytes = [System.IO.File]::ReadAllBytes($target.Path)
             $text = [System.Text.Encoding]::ASCII.GetString($bytes)
-            
-            $foundInFile = $false
             foreach ($pattern in $target.Patterns) {
                 if ($text -match [regex]::Escape($pattern)) {
-                    Write-Result "FOUND in $($fileInfo.Name): '$pattern'" "FOUND"
-                    $foundInFile = $true
+                    Write-Result "НАЙДЕНО в $([System.IO.Path]::GetFileName($target.Path)): '$pattern'" "FOUND"
                 }
             }
-            if (-not $foundInFile) {
-                Write-Result "No suspicious strings in $($fileInfo.Name)" "OK"
-            }
-        } catch {
-            Write-Result "Error reading $($fileInfo.Name): $($_.Exception.Message)" "WARN"
-        }
+        } catch { }
     }
-    Write-Host ""
-}
-
-# ============================================================
-# MODULE 5: NETWORK
-# ============================================================
-function Test-Network {
-    Write-Section "MODULE 5: NETWORK CHECK"
-    try {
-        $connections = Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue |
-                       Where-Object { $_.RemotePort -in @(25565, 25566, 19132) }
-        if ($connections) {
-            foreach ($conn in $connections) {
-                Write-Result "Connection: $($conn.RemoteAddress):$($conn.RemotePort) (PID: $($conn.OwningProcess))" "INFO"
-            }
-        } else {
-            Write-Result "No active Minecraft port connections." "OK"
-        }
-    } catch {
-        Write-Result "Network check error: $_" "WARN"
-    }
-    Write-Host ""
+    Write-Result "Проверка строк завершена." "OK"
 }
 
 # ============================================================
 # TELEGRAM REPORT
 # ============================================================
 function Send-TelegramReport {
-    param([string]$ReportText)
-    
     if ($Config.TelegramBotToken -eq "ТВОЙ_ТОКЕН_БОТА") {
-        Write-Result "Telegram not configured, report not sent." "WARN"
+        Write-Result "Telegram не настроен." "WARN"
         return
     }
     
     $tempFile = "$env:TEMP\enginecheck_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-    $ReportText | Out-File -FilePath $tempFile -Encoding UTF8
+    $Script:Report -join "`r`n" | Out-File -FilePath $tempFile -Encoding UTF8
     
     try {
         $uri = "https://api.telegram.org/bot$($Config.TelegramBotToken)/sendDocument"
-        
         if ($PSVersionTable.PSVersion.Major -ge 7) {
-            $Form = @{
-                chat_id = $Config.TelegramChatId
-                document = Get-Item $tempFile
-                caption = "EngineCheck Report - Threats Found: $($Script:ThreatsFound)"
-            }
-            Invoke-RestMethod -Uri $uri -Method Post -Form $Form -ErrorAction Stop
+            Invoke-RestMethod -Uri $uri -Method Post -Form @{ chat_id = $Config.TelegramChatId; document = Get-Item $tempFile }
         } else {
             $boundary = [System.Guid]::NewGuid().ToString()
             $fileBytes = [System.IO.File]::ReadAllBytes($tempFile)
             $enc = [System.Text.Encoding]::GetEncoding('ISO-8859-1')
-            $fileEnc = $enc.GetString($fileBytes)
             $LF = "`r`n"
-            
-            $body = (
-                "--$boundary",
-                "Content-Disposition: form-data; name=`"chat_id`"$LF",
-                $Config.TelegramChatId,
-                "--$boundary",
-                "Content-Disposition: form-data; name=`"document`"; filename=`"report.txt`"",
-                "Content-Type: application/octet-stream$LF",
-                $fileEnc,
-                "--$boundary--$LF"
-            ) -join $LF
-            
-            Invoke-RestMethod -Uri $uri -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $body -ErrorAction Stop
+            $body = ("--$boundary","Content-Disposition: form-data; name=`"chat_id`"$LF",$Config.TelegramChatId,"--$boundary","Content-Disposition: form-data; name=`"document`"; filename=`"report.txt`"","Content-Type: application/octet-stream$LF",$enc.GetString($fileBytes),"--$boundary--$LF") -join $LF
+            Invoke-RestMethod -Uri $uri -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $body
         }
-        
-        Write-Result "Report sent to Telegram." "OK"
+        Write-Result "Отчёт отправлен в Telegram." "OK"
     } catch {
-        Write-Result "Telegram send error: $($_.Exception.Message)" "WARN"
+        Write-Result "Ошибка отправки: $_" "WARN"
     } finally {
         Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
     }
 }
 
 # ============================================================
-# MAIN EXECUTION
+# MAIN EXECUTION LOOP
 # ============================================================
 Write-Banner
-
-$startTime = Get-Date
 $Script:Report.Add("=== ENGINE CHECK REPORT ===")
-$Script:Report.Add("Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
-$Script:Report.Add("Computer: $env:COMPUTERNAME")
-$Script:Report.Add("User: $env:USERNAME")
+$Script:Report.Add("Дата: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
 $Script:Report.Add("")
 
-Test-Services
-Test-Processes
-Test-Jars
-Test-Strings
-Test-Network
-
-$elapsed = (Get-Date) - $startTime
-$Script:Report.Add("")
-$Script:Report.Add("=== COMPLETED ===")
-$Script:Report.Add("Duration: $($elapsed.ToString('mm\:ss'))")
-$Script:Report.Add("Total threats found: $($Script:ThreatsFound)")
-
-# Final Summary
-Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║                      SCAN COMPLETE                           ║" -ForegroundColor Cyan
-Write-Host "╠══════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-if ($Script:ThreatsFound -eq 0) {
-    Write-Host "║  RESULT: CLEAN - No threats detected                         ║" -ForegroundColor Green
-} else {
-    Write-Host "║  RESULT: $($Script:ThreatsFound) THREAT(S) FOUND                              ║" -ForegroundColor Red
+$exit = $false
+while (-not $exit) {
+    Show-MainMenu
+    $choice = Read-Host "  Введите номер"
+    
+    switch ($choice) {
+        "1" { Test-Services; Test-Processes; Start-JarScan; Test-Strings; Start-EverythingScan }
+        "2" { Start-JarScan }
+        "3" { Test-Services }
+        "4" { Test-Processes }
+        "5" { Start-EverythingScan }
+        "6" { Test-Strings }
+        "7" { Send-TelegramReport }
+        "0" { $exit = $true }
+        default { Write-Host "  Неверный выбор." -ForegroundColor Red }
+    }
+    
+    if (-not $exit) {
+        Write-Host ""
+        Write-Host "  Нажмите Enter, чтобы вернуться в меню..." -ForegroundColor Cyan
+        Read-Host | Out-Null
+        Write-Banner
+    }
 }
-Write-Host "║  Duration: $($elapsed.ToString('mm\:ss'))                                           ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-Write-Host ""
 
-$finalReport = $Script:Report -join "`r`n"
-Send-TelegramReport -ReportText $finalReport
-
-Write-Host "Press Enter to exit..." -ForegroundColor Cyan
-Read-Host
+Write-Host "  Выход..." -ForegroundColor Cyan
